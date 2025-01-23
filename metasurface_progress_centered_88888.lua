@@ -201,7 +201,7 @@ end
 -- 6) Prepare subfolders / output
 ------------------------------------------------------------------------------
 -- For reproducibility, fix a seed
-math.randomseed(88888)
+math.randomseed(12345)
 
 -- Setting up polygon radius parameters:
 local base_outer = 0.30
