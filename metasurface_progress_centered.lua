@@ -182,7 +182,8 @@ function save_polygon_to_file(filename, polygon)
         error("Could not open '" .. filename .. "' for writing.")
     end
     for i=1,#polygon,2 do
-        file:write(string.format("%.6f,%.6f\n", polygon[i], polygon[i+1]))
+        -- file:write(string.format("%.6f,%.6f\n", polygon[i], polygon[i+1]))
+	file:write(string.format("%.17g,%.17g\n", polygon[i], polygon[i+1]))
     end
     file:close()
 end
