@@ -215,7 +215,7 @@ local dt = os.date("%Y%m%d_%H%M%S")
 
 -- Shapes folder
 local shapes_subfolder = string.format(
-    "shapes/%s-poly-wo-hollow-nQ%d-nS%d-seed%d",
+    "shapes_seeded/%s-poly-wo-hollow-nQ%d-nS%d-seed%d",
     dt, N_quarter, num_shapes, random_seed
 )
 os.execute('mkdir -p "'..shapes_subfolder..'"')
@@ -223,8 +223,8 @@ os.execute('mkdir -p "'..shapes_subfolder..'"')
 -- If storing data, open a CSV file for results
 local out_file
 if store_data then
-    os.execute('mkdir -p "results"')
-    local outname = string.format("results/%s_output_nQ%d_nS%d_seed%d.csv",
+    os.execute('mkdir -p "results_seeded"')
+    local outname = string.format("results_seeded/%s_output_nQ%d_nS%d_seed%d.csv",
                                   dt, N_quarter, num_shapes, random_seed)
     out_file = io.open(outname, "w")
     if not out_file then
