@@ -5,7 +5,7 @@
 
 ../build/S4 -a "1 10000 -s" -t 32 metasurface_progress_centered.lua &
 ../build/S4 -a "2 10000 -s" -t 32 metasurface_progress_centered.lua &
-../build/S4 -a "3 10000 -s" -t 32 3metasurface_progress_centered.lua &
+../build/S4 -a "3 10000 -s" -t 32 metasurface_progress_centered.lua &
 ../build/S4 -a "4 10000 -s" -t 32 metasurface_progress_centered.lua &
 
 # Wait for all background tasks to finish
