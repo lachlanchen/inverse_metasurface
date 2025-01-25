@@ -9,7 +9,7 @@ Usage example:
     --merged_csv merged_s4_shapes_20250119_153038.csv \
     --c_val 0.0 \
     --shape_idx 1 \
-    --s4cmd ../build/S4 \
+    --s4cmd /path/to/S4 \
     --out_csv out_temp.csv \
     --debug
 

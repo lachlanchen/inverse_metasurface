@@ -20,7 +20,7 @@ def read_merged_csv(merged_csv_path):
             except:
                 pass
             try:
-                row["NQ"] = float(row["NQ"])
+                row["nQ"] = float(row["nQ"])
             except:
                 pass
             try:
@@ -33,8 +33,8 @@ def read_merged_csv(merged_csv_path):
 def find_rows_for_nq_shape(rows, nq_val, shape_idx_val):
     selected = []
     for r in rows:
-        if "NQ" in r and "shape_idx" in r:
-            if abs(r["NQ"] - nq_val) < 1e-9 and r["shape_idx"] == shape_idx_val:
+        if "nQ" in r and "shape_idx" in r:
+            if abs(r["nQ"] - nq_val) < 1e-9 and r["shape_idx"] == shape_idx_val:
                 selected.append(r)
     return selected
 
@@ -120,10 +120,10 @@ def read_results_csv(csv_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--merged-csv", default="merged_s4_shapes_20250119_153038.csv",
+    parser.add_argument("--merged-csv", default="merged_s4_shapes_20250123_155420.csv",
                         help="Path to the big merged CSV file.")
     parser.add_argument("--nq", type=float, default=None,
-                        help="NQ value to filter. If not given, pick a random from the CSV.")
+                        help="nQ value to filter. If not given, pick a random from the CSV.")
     parser.add_argument("--shape-idx", type=int, default=None,
                         help="shape_idx to filter. If not given, pick a random from the CSV.")
     parser.add_argument("--c", default="all",
@@ -145,16 +145,16 @@ def main():
 
     if args.nq is None or args.shape_idx is None:
         row0 = random.choice(all_rows)
-        chosen_nq = row0["NQ"]
+        chosen_nq = row0["nQ"]
         chosen_shape = row0["shape_idx"]
-        print(f"[INFO] Using NQ={chosen_nq}, shape_idx={chosen_shape}.")
+        print(f"[INFO] Using nQ={chosen_nq}, shape_idx={chosen_shape}.")
     else:
         chosen_nq = float(args.nq)
         chosen_shape = args.shape_idx
 
     matching_rows = find_rows_for_nq_shape(all_rows, chosen_nq, chosen_shape)
     if not matching_rows:
-        print(f"[ERROR] No rows found for NQ={chosen_nq}, shape_idx={chosen_shape}.")
+        print(f"[ERROR] No rows found for nQ={chosen_nq}, shape_idx={chosen_shape}.")
         return
 
     polygon_str = matching_rows[0].get("vertices_str", "")
@@ -260,7 +260,7 @@ def main():
     dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     outdir = f"check_dataset_plots_{dt_str}"
     os.makedirs(outdir, exist_ok=True)
-    outpng = os.path.join(outdir, f"comparison_NQ{chosen_nq}_shape{chosen_shape}.png")
+    outpng = os.path.join(outdir, f"comparison_nQ{chosen_nq}_shape{chosen_shape}.png")
     plt.savefig(outpng, dpi=250)
     print(f"[INFO] Figure saved to {outpng}")
 
