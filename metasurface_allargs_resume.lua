@@ -1,12 +1,18 @@
 --------------------------------------------------------------------------------
--- metasurface_seed_resume.lua
+-- metasurface_allargs_resume.lua
+-- 
+-- Accepts arguments in this order:
+--   1) N_quarter
+--   2) num_shapes
+--   3) random_seed
+--   4) prefix
+--   5) num_g
+--   6) base_outer
+--   7) rand_outer
+--   8+) optional flags (-v, -s)
 --
--- Extends the filename scheme to include:
---   prefix, seed, num_g, N_quarter, and num_shapes
---
--- If prefix == "", we use datetime for a new run (no resume).
--- Otherwise, we check for an existing file with the given prefix+seed+g, etc.
--- If found => resume, if not => new run with that exact name.
+-- Incorporates them all into the filename. If prefix == "", we use datetime
+-- and do not resume. If prefix != "", we resume if a file with that name exists.
 --------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -17,6 +23,8 @@ local default_num_shapes  = 10
 local default_random_seed = 88888
 local default_prefix      = ""
 local default_num_g       = 80
+local default_base_outer  = 0.25
+local default_rand_outer  = 0.20
 
 local verbose     = false
 local store_data  = false
@@ -26,6 +34,8 @@ local num_shapes  = default_num_shapes
 local random_seed = default_random_seed
 local prefix      = default_prefix
 local num_g       = default_num_g
+local base_outer  = default_base_outer
+local rand_outer  = default_rand_outer
 
 local arg_str = S4.arg
 if arg_str then
@@ -71,8 +81,24 @@ if arg_str then
         end
     end
 
-    -- 6+) optional flags
-    for i = 6, #tokens do
+    -- 6) base_outer
+    if tokens[6] then
+        local val = tonumber(tokens[6])
+        if val then
+            base_outer = val
+        end
+    end
+
+    -- 7) rand_outer
+    if tokens[7] then
+        local val = tonumber(tokens[7])
+        if val then
+            rand_outer = val
+        end
+    end
+
+    -- 8+) optional flags
+    for i = 8, #tokens do
         if tokens[i] == "-v" then
             verbose = true
         elseif tokens[i] == "-s" then
@@ -93,6 +119,8 @@ print(string.format("  num_shapes  = %d", num_shapes))
 print(string.format("  random_seed = %d", random_seed))
 print(string.format("  prefix      = '%s'", prefix))
 print(string.format("  num_g       = %d", num_g))
+print(string.format("  base_outer  = %.4f", base_outer))
+print(string.format("  rand_outer  = %.4f", rand_outer))
 print(string.format("  verbose     = %s", tostring(verbose)))
 print(string.format("  store_data  = %s", tostring(store_data)))
 
@@ -115,7 +143,7 @@ local folder = "partial_crys_data"
 local all_csvs = list_csv(folder)
 table.sort(all_csvs)
 if #all_csvs == 0 then
-    error("No CSV files found in '"..folder.."'!")
+    error("No CSV files found in '"..folder.."'.")
 end
 
 ------------------------------------------------------------------------------
@@ -158,28 +186,28 @@ end
 math.randomseed(random_seed)
 
 ------------------------------------------------------------------------------
--- 4) Generate C4 polygon
+-- 4) Generate polygon
 ------------------------------------------------------------------------------
-function generate_c4_polygon(N, base_radius, rand_amt)
+function generate_c4_polygon(N, base_r, rand_amt)
     if (N % 4) ~= 0 then
         error("generate_c4_polygon: N must be divisible by 4 for perfect C4 symmetry.")
     end
     local verts = {}
-    local two_pi = 2*math.pi
-    local quarter = N/4
+    local two_pi = 2 * math.pi
+    local quarter = N / 4
 
     local radii = {}
     for i=1, quarter do
-        local r = base_radius + rand_amt*(2*math.random() - 1)
+        local r = base_r + rand_amt*(2*math.random() - 1)
         table.insert(radii, r)
     end
 
     for i=0, N-1 do
         local angle = i*(two_pi/N)
         local idx   = (i % quarter) + 1
-        local r     = radii[idx]
-        local x     = r * math.cos(angle)
-        local y     = r * math.sin(angle)
+        local rad   = radii[idx]
+        local x     = rad * math.cos(angle)
+        local y     = rad * math.sin(angle)
         table.insert(verts, x)
         table.insert(verts, y)
     end
@@ -219,27 +247,28 @@ function save_polygon_to_file(filename, polygon)
 end
 
 ------------------------------------------------------------------------------
--- 6) Decide final prefix
+-- 6) Decide final prefix (datetime if prefix == "")
 ------------------------------------------------------------------------------
 local date_prefix = os.date("%Y%m%d_%H%M%S")
-local do_resume   = true
+local do_resume = true
 
 if prefix == "" then
-    -- If no prefix provided => brand new run => use datetime
-    prefix = date_prefix
-    do_resume = false
-    print("No prefix given => new run, no resume => using date prefix: "..prefix)
+    prefix = date_prefix  -- replace with datetime
+    do_resume = false     -- brand new run
+    print("No prefix => new run => using datetime prefix: "..prefix)
 else
-    print("Prefix provided => attempt to resume if file exists, else new with prefix: "..prefix)
+    print("Prefix given => attempt resume if file exists: "..prefix)
 end
 
 ------------------------------------------------------------------------------
--- 7) Build final name that includes prefix, seed, g, nQ, nS
+-- 7) Build final name that includes all parameters
 ------------------------------------------------------------------------------
--- e.g. results/myprefix_seed12345_g80_nQ2_nS10000.csv
--- or if prefix=20250127_120000 => 
---    results/20250127_120000_seed12345_g80_nQ2_nS10000.csv
-local final_name = string.format("%s_seed%d_g%d_nQ%d_nS%d", prefix, random_seed, num_g, N_quarter, num_shapes)
+-- e.g. "myrun_seed12345_g80_nQ4_nS100000_b0.25_r0.20"
+-- We'll format base_outer, rand_outer with, say, 2 decimal places
+local final_name = string.format(
+    "%s_seed%d_g%d_nQ%d_nS%d_b%.2f_r%.2f",
+    prefix, random_seed, num_g, N_quarter, num_shapes, base_outer, rand_outer
+)
 
 local shapes_subfolder = "shapes/"..final_name
 local out_filename     = "results/"..final_name..".csv"
@@ -257,7 +286,6 @@ local resume_shape_idx = 1
 local resume_csv_index = 1
 local resume_row_index = 1
 
--- map from csvfile to index for skipping
 local csv_index_map = {}
 for i, f in ipairs(all_csvs) do
     csv_index_map[f] = i
@@ -291,7 +319,6 @@ end
 
 if store_data then
     if do_resume then
-        -- check if out_filename exists
         local check_handle = io.open(out_filename, "r")
         if check_handle then
             check_handle:close()
@@ -300,16 +327,16 @@ if store_data then
             if info then
                 resume_info = info
                 out_file = io.open(out_filename, "a")
-                print(string.format("Resuming from existing '%s': shape=%d, file=%s, row=%d",
+                print(string.format("Resuming from '%s': shape=%d, file=%s, row=%d",
                                     out_filename, info.shape_idx, info.csv_filename, info.row_idx))
             else
                 -- no valid data, overwrite
                 out_file = io.open(out_filename, "w")
                 out_file:write("csvfile,shape_idx,row_idx,wavelength_um,freq_1perum,n_eff,k_eff,R,T,R_plus_T\n")
-                print("Found existing file but no valid data => overwriting: "..out_filename)
+                print("Existing file but no valid data => overwriting: "..out_filename)
             end
         else
-            -- new run with user prefix
+            -- new run
             out_file = io.open(out_filename, "w")
             out_file:write("csvfile,shape_idx,row_idx,wavelength_um,freq_1perum,n_eff,k_eff,R,T,R_plus_T\n")
             print("No existing file => new run => "..out_filename)
@@ -321,7 +348,7 @@ if store_data then
         print("Forcing new file => "..out_filename)
     end
 else
-    print("store_data=false => Not generating CSV output.")
+    print("store_data=false => not generating CSV output.")
 end
 
 if resume_info then
@@ -366,9 +393,6 @@ end
 ------------------------------------------------------------------------------
 -- 10) Main loop
 ------------------------------------------------------------------------------
-local base_outer = 0.25
-local rand_outer = 0.20
-
 for shape_idx = resume_shape_idx, num_shapes do
     local outer_poly = generate_c4_polygon(N_outer, base_outer, rand_outer)
     local shape_fname = string.format("%s/outer_shape%d.txt", shapes_subfolder, shape_idx)
@@ -443,7 +467,7 @@ for shape_idx = resume_shape_idx, num_shapes do
             current_count = current_count + 1
             local fraction = current_count / total_iterations
             local fill = math.floor(fraction * bar_width)
-            local bar = string.rep("#", fill)..string.rep("-", bar_width - fill)
+            local bar = string.rep("#", fill) .. string.rep("-", bar_width - fill)
 
             io.write(string.format(
                 "\r[%s] %3d%% (%s, shape=%d/%d, csv=%d/%d, row=%d/%d)",
