@@ -8,9 +8,8 @@ from tqdm import tqdm
 
 def parse_crys_c(csvfile_path):
     """
-    Given something like 'partial_crys_data/partial_crys_C0.0.csv',
-    extract the numeric crystallization fraction: 0.0.
-    Returns None if not found.
+    Extract crystallization fraction from the filename.
+    Example: 'partial_crys_C0.0.csv' -> 0.0
     """
     match = re.search(r'partial_crys_C([\d\.]+)\.csv', csvfile_path)
     if match:
@@ -19,87 +18,97 @@ def parse_crys_c(csvfile_path):
 
 def read_shape_vertices(shape_file):
     """
-    Read a shape file like outer_shape9.txt, which has lines "x,y".
-    Return a list of tuples (x, y).
+    Read a shape file and return a list of (x, y) tuples.
     """
     coords = []
-    with open(shape_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(',')
-            if len(parts) == 2:
-                x_val = float(parts[0])
-                y_val = float(parts[1])
-                coords.append((x_val, y_val))
+    try:
+        with open(shape_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(',')
+                if len(parts) == 2:
+                    x_val = float(parts[0])
+                    y_val = float(parts[1])
+                    coords.append((x_val, y_val))
+    except FileNotFoundError:
+        print(f"Shape file not found: {shape_file}")
     return coords
 
 def gather_run_data(result_csv):
     """
-    Read one results CSV (e.g. 'iccp10kG40NoOv_nQ1_nS10000_b0.25_r0.20.csv'),
-    parse the numeric 'NQ' and 'nS' from the filename using a more robust regex,
-    then return a DataFrame with these columns:
-
-      ['folder_key', 'NQ', 'nS', 'csvfile', 'shape_idx', 'row_idx',
-       'wavelength_um', 'freq_1perum', 'n_eff', 'k_eff', 'R', 'T', 'c']
+    Parse key parameters (prefix, seed, nQ, nS) from the filename and
+    load the CSV data into a DataFrame.
     """
     base_name = os.path.basename(result_csv)
-    # More robust pattern captures:
-    # (group1)_nQ(\d+)_nS(\d+)(anything).csv
-    pattern = re.compile(r'(.*)_nQ(\d+)_nS(\d+).*\.csv$')
+    pattern = re.compile(r'(.*?)(_seed\d+)?_nQ(\d+)_nS(\d+).*\.csv$')
     m = pattern.match(base_name)
     if m:
-        folder_key = m.group(1)
-        NQ = int(m.group(2))
-        nS = int(m.group(3))
+        prefix = m.group(1)
+        seed = m.group(2) or ""
+        nQ = int(m.group(3))
+        nS = int(m.group(4))
     else:
-        folder_key = "unknown"
-        NQ, nS = None, None
-        print(f"Warning: can't parse nQ/nS from filename: {base_name}")
+        prefix, seed, nQ, nS = "unknown", "", None, None
+        print(f"Warning: Can't parse filename: {base_name}")
 
     df = pd.read_csv(result_csv)
     # parse c from each row's csvfile
     df['c'] = df['csvfile'].apply(parse_crys_c)
 
-    # add NQ, nS
-    df['NQ'] = NQ
+    # store parsed info
+    df['prefix'] = prefix
+    df['seed'] = seed
+    df['nQ'] = nQ
     df['nS'] = nS
-
-    # store the folder_key
-    df['folder_key'] = folder_key
 
     return df
 
+def find_shape_folder(prefix, seed, nQ, nS):
+    """
+    Find the best matching shape folder based on the prefix, seed, nQ, and nS.
+    """
+    # Construct a flexible glob pattern
+    base_pattern = f"shapes/{prefix}*"
+    if seed:
+        base_pattern += f"{seed}*"
+    base_pattern += f"_nQ{nQ}_nS{nS}*"
+
+    matching_folders = glob.glob(base_pattern)
+    if len(matching_folders) == 1:
+        return matching_folders[0]
+    elif len(matching_folders) > 1:
+        print(f"Multiple shape folders match: {matching_folders}")
+        # Select the best match or prompt user, etc.
+        return matching_folders[0]
+    else:
+        print(f"No shape folder found for prefix='{prefix}', seed='{seed}', nQ={nQ}, nS={nS}")
+        return None
+
 def pivot_spectrum(df):
     """
-    Convert a DataFrame with columns:
-      [folder_key, NQ, nS, shape_idx, c, wavelength_um, R, T, ...]
-    into a wide format so each row is (folder_key, NQ, nS, shape_idx, c)
-    plus columns R@..., T@... for each wavelength.
+    Pivot the spectrum data for easier analysis.
+    We include prefix, seed, nQ, nS in the index so we can still access them.
     """
     df['wave_str'] = df['wavelength_um'].apply(lambda x: f"{x:.3f}")
 
-    # Pivot R
+    pivot_index = ['prefix', 'seed', 'nQ', 'nS', 'shape_idx', 'c']
+
     pivoted_R = df.pivot_table(
-        index=['folder_key','NQ','nS','shape_idx','c'],
+        index=pivot_index,
         columns='wave_str',
         values='R',
         aggfunc='mean'
-    )
-    # Pivot T
+    ).add_prefix('R@')
+
     pivoted_T = df.pivot_table(
-        index=['folder_key','NQ','nS','shape_idx','c'],
+        index=pivot_index,
         columns='wave_str',
         values='T',
         aggfunc='mean'
-    )
+    ).add_prefix('T@')
 
-    # Rename columns
-    pivoted_R = pivoted_R.add_prefix('R@')
-    pivoted_T = pivoted_T.add_prefix('T@')
-
-    # Merge
     pivoted = pivoted_R.merge(pivoted_T, left_index=True, right_index=True, how='outer')
     pivoted.reset_index(inplace=True)
 
@@ -107,9 +116,7 @@ def pivot_spectrum(df):
 
 def attach_shape_vertices(df_pivoted, shapes_folder):
     """
-    df_pivoted has columns: [folder_key, NQ, nS, shape_idx, c, R@..., T@...].
-    For each shape_idx, read 'outer_shape{shape_idx}.txt' in shapes_folder
-    and store its vertices as a single string in 'vertices_str'.
+    Attach shape vertices to the DataFrame by reading shape files.
     """
     vertices_str_list = []
     for _, row in tqdm(df_pivoted.iterrows(), total=df_pivoted.shape[0], desc="Attaching shape vertices"):
@@ -117,90 +124,57 @@ def attach_shape_vertices(df_pivoted, shapes_folder):
         shape_file = os.path.join(shapes_folder, f"outer_shape{int(shape_idx)}.txt")
         if os.path.isfile(shape_file):
             coords = read_shape_vertices(shape_file)
-            coords_str = ";".join([f"{x:.6f},{y:.6f}" for x,y in coords])
+            coords_str = ";".join([f"{x:.6f},{y:.6f}" for x, y in coords])
         else:
             coords_str = ""
         vertices_str_list.append(coords_str)
-
     df_pivoted['vertices_str'] = vertices_str_list
     return df_pivoted
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Merge S4 data from results and attach shape coordinates, using a more flexible filename parser."
-    )
-    parser.add_argument(
-        '--prefix',
-        type=str,
-        default='',
-        help="Specify a prefix (e.g. 'iccp10kG40NoOv'), to glob only CSVs containing that prefix. If omitted, merges all."
-    )
+    parser = argparse.ArgumentParser(description="Merge S4 data and attach shape coordinates with robust folder matching.")
+    parser.add_argument('--prefix', type=str, default='', help="Prefix to filter files (e.g., 'iccp10kG40NoOv').")
     args = parser.parse_args()
 
-    # Construct glob pattern
-    # If user provides --prefix 'iccp10kG40NoOv', we look for files in 'results/*iccp10kG40NoOv*.csv'
-    # Otherwise, just pick up all CSVs in results/.
-    if args.prefix:
-        glob_pattern = f"results/*{args.prefix}*.csv"
-    else:
-        glob_pattern = "results/*.csv"
-
-    # Gather relevant CSVs
+    glob_pattern = f"results/*{args.prefix}*.csv" if args.prefix else "results/*.csv"
     results_csv_list = glob.glob(glob_pattern)
     if not results_csv_list:
-        print(f"No matching CSVs found in 'results/' with pattern: {glob_pattern}")
+        print(f"No matching CSVs found with pattern: {glob_pattern}")
         return
 
     all_pieces = []
-    print(f"Found {len(results_csv_list)} CSV files to merge.")
-    
-    # Process each CSV with a progress bar
     for result_csv in tqdm(results_csv_list, desc="Processing CSV files"):
-        # 1) Read & parse
         df = gather_run_data(result_csv)
         if df.empty:
             continue
-
-        # 2) Pivot spectrum
         df_pivoted = pivot_spectrum(df)
 
-        # 3) Build shape folder name from folder_key, NQ, nS
-        #    If the user always has shape folders in the style:
-        #        shapes/{folder_key}-poly-wo-hollow-nQ{NQ}-nS{nS}
-        #    Then do:
-        folder_key = df_pivoted['folder_key'].iat[0]
-        nQ_int = df_pivoted['NQ'].iat[0] if df_pivoted['NQ'].notna().any() else None
-        nS_int = df_pivoted['nS'].iat[0] if df_pivoted['nS'].notna().any() else None
+        # Now we can get nQ, nS from the pivoted DataFrame
+        prefix = df_pivoted['prefix'].iat[0]
+        seed   = df_pivoted['seed'].iat[0]
+        nQ     = df_pivoted['nQ'].iat[0]
+        nS     = df_pivoted['nS'].iat[0]
 
-        if nQ_int is not None and nS_int is not None:
-            shapes_folder = f"shapes/{folder_key}-poly-wo-hollow-nQ{nQ_int}-nS{nS_int}"
-        else:
-            # fallback
-            shapes_folder = None
-
-        # 4) Attach shape vertices if folder exists
-        if shapes_folder and os.path.isdir(shapes_folder):
+        # Find the correct shape folder
+        shapes_folder = find_shape_folder(prefix, seed, nQ, nS)
+        if shapes_folder:
             df_pivoted = attach_shape_vertices(df_pivoted, shapes_folder)
         else:
             df_pivoted['vertices_str'] = ""
 
         all_pieces.append(df_pivoted)
 
-    # 5) Concatenate everything
     if not all_pieces:
-        print("No data frames were created. Exiting.")
+        print("No data to merge. Exiting.")
         return
-    final_df = pd.concat(all_pieces, ignore_index=True)
-    print("Merged all runs. final_df.shape =", final_df.shape)
 
-    # 6) Write out the combined CSV
-    # e.g.: merged_s4_shapes_iccp10kG40NoOv.csv
-    if args.prefix:
-        outname = f"merged_s4_shapes_{args.prefix}.csv"
-    else:
-        outname = "merged_s4_shapes.csv"
-    final_df.to_csv(outname, index=False)
-    print(f"Saved combined data to '{outname}'")
+    final_df = pd.concat(all_pieces, ignore_index=True)
+    print(f"Merged all runs. final_df.shape = {final_df.shape}")
+
+    # Save output file
+    output_name = f"merged_s4_shapes_{args.prefix or 'all'}.csv"
+    final_df.to_csv(output_name, index=False)
+    print(f"Saved combined data to '{output_name}'")
 
 if __name__ == "__main__":
     main()
