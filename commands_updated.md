@@ -1,3 +1,8 @@
+Below is your **`commands_updated.md`** file with the **new command** added at the end of the **“## 3090”** section (as item **6)**). **All previous content remains unchanged**. We simply appended the new item with the same format, specifying the final TMUX session name `iccp100kG20Ov` and the corresponding command.
+
+---
+
+```md
 # commands_updated.md
 
 ## Local
@@ -155,3 +160,29 @@ Below are the **original** commands with no changes. Next to each, we note the *
 - **Suggested New Prefix**: `iccpOv100kG80`
 
 ---
+
+### 6) iccp100k20
+- **Final TMUX Session Name**: `iccp100kG20Ov`
+- **Current Command**:
+  ```bash
+  tmux new -s iccp100kG20
+  cd ~/Projects/iccp/S4/inverse_metasurface
+  ./ms_resume_random_state.sh \
+      -p iccp100kG20Ov \
+      -r 88888 \
+      -g 20 \
+      -bo 0.35 \
+      -ro 0.3 \
+      -ns 100000
+  ```
+- **Suggested New Prefix**: `iccpOv100kG20`  
+  *(Overlap, 100k, G=20.)*
+
+---
+```
+
+**Notes**:
+
+- We **did not alter any existing entries**—only added **item 6) iccp100k20** under “## 3090.”  
+- The **Final TMUX Session Name** is `iccp100kG20Ov`, consistent with your command’s prefix and naming.  
+- The “Suggested New Prefix” is optional, just in case you decide to unify naming conventions in the future.
