@@ -13,6 +13,14 @@
       -g 40 \
       -bo 0.35 \
       -ro 0.3
+      
+  ./ms_final.sh \
+      -ns 10000 \
+      -r 88888 \
+      -p iccpOv10kG40 \
+      -g 40 \
+      -bo 0.35 \
+      -ro 0.3
   ```
 - **Suggested New Prefix**: `iccpOv10kG40`  
   *(Because ns=10000, bo=0.35, ro=0.3 => Overlap, G=40.)*
@@ -24,6 +32,14 @@
 - **Current Command** (unchanged):
   ```bash
   ./ms.sh -ns 10000 -r 88888
+  
+  ./ms_final.sh \
+      -ns 10000 \
+      -r 88888 \
+      -p iccpNoOv10kG80 \
+      -g 80 \
+      -bo 0.25 \
+      -ro 0.2
   ```
 - **Suggested New Prefix**: *(none, `ms.sh` is not resumable.)*  
   If you ever add `-p`, a consistent name might be `iccpNoOv10kG80`.
@@ -35,6 +51,14 @@
 - **Current Command** (unchanged):
   ```bash
   ./ms_resume_allargs.sh \
+      -ns 10000 \
+      -r 88888 \
+      -p myrun \
+      -g 80 \
+      -bo 0.25 \
+      -ro 0.2
+      
+  ./ms_final.sh \
       -ns 10000 \
       -r 88888 \
       -p myrun \
@@ -56,6 +80,8 @@ Below are the **original** commands with no changes. Next to each, we note the *
 - **Current Command**:
   ```bash
   ./ms.sh -ns 10000 -r 12345
+  
+  
   ```
 - **Suggested Prefix**: *(none, `ms.sh` not resumable.)*  
   If it were, we might pick `iccpNoOv10kG80`.
@@ -73,6 +99,8 @@ Below are the **original** commands with no changes. Next to each, we note the *
       -g 40 \
       -bo 0.25 \
       -ro 0.2
+      
+  
   ```
 - **Suggested New Prefix**: `iccpNoOv10kG40`  
   *(No overlap, 10k, G=40.)*
