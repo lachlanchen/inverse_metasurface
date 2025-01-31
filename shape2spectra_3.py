@@ -6,8 +6,9 @@ shape2spectra.py
 Modular code for reading SHIFT->Q1 shapes (up to 4 points) and predicting
 (11x100) spectra with a small Transformer aggregator.
 
-Now uses a corrected 'replicate_c4' for true C4 rotational symmetry:
-  (x, y) -> (-y, x) -> (-x, -y) -> (y, -x).
+Added:
+  - Middle plot axis range => [-0.5, 0.5] in both x & y.
+  - Output results to a folder with a datetime suffix.
 """
 
 import os
@@ -194,21 +195,17 @@ class ShapeToSpectraModel(nn.Module):
 def replicate_c4(points):
     """
     Given Q1 points (x>0,y>0),
-    replicate them to get symmetrical shape in all 4 quadrants
-    by a 90° rotation each time:
-       (x,  y) -> (-y,  x) -> (-x, -y) -> (y, -x).
+    replicate them to get symmetrical shape in all 4 quadrants.
+    (x,y)->(±x,±y)
+    Returns array with 4*N points.
     """
-    c4 = []
-    for (x,y) in points:
-        # original Q1 => (x, y)
-        c4.append([ x,  y])    # 0° rotation
-        # 90° => (-y, x)
-        c4.append([-y,  x])
-        # 180° => (-x, -y)
-        c4.append([-x, -y])
-        # 270° => (y, -x)
-        c4.append([ y, -x])
-    return np.array(c4, dtype=np.float32)
+    mirrored = []
+    for (xx,yy) in points:
+        mirrored.append([ xx,  yy])  # Q1
+        mirrored.append([-xx,  yy])  # Q2
+        mirrored.append([-xx, -yy])  # Q3
+        mirrored.append([ xx, -yy])  # Q4
+    return np.array(mirrored, dtype=np.float32)
 
 def sort_points_by_angle(points):
     """
@@ -260,7 +257,7 @@ def plot_spectra(ax, spectra_gt, spectra_pred=None, color_gt='blue', color_pred=
     ax.set_xlabel("Wavelength index")
     ax.set_ylabel("Reflectance")
 
-def visualize_4x3_samples(model, ds_val, device, out_dir=".", seed=1234):
+def visualize_4x3_samples(model, ds_val, device, out_dir=".", seed=888888):
     """
     Creates a 4-row, 3-col figure:
       row => shape with 1..4 Q1 points

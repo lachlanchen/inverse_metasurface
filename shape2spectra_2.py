@@ -6,8 +6,7 @@ shape2spectra.py
 Modular code for reading SHIFT->Q1 shapes (up to 4 points) and predicting
 (11x100) spectra with a small Transformer aggregator.
 
-Now uses a corrected 'replicate_c4' for true C4 rotational symmetry:
-  (x, y) -> (-y, x) -> (-x, -y) -> (y, -x).
+This version ensures the final shape plot is "C4 filled" across all 4 quadrants.
 """
 
 import os
@@ -21,8 +20,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
-
-from datetime import datetime
 
 ###############################################################################
 # 1) Dataset Class
@@ -56,7 +53,6 @@ class Q1ShiftedShapeDataset(Dataset):
         self.data_list = []
         grouped = self.df.groupby("shape_uid", sort=False)
         for uid, grp in grouped:
-            # We want exactly 11 lines => c=0..1
             if len(grp) != 11:
                 continue
             grp_sorted = grp.sort_values(by="c")  # ensure c=0..1 ascending
@@ -83,7 +79,7 @@ class Q1ShiftedShapeDataset(Dataset):
             if len(all_xy) == 0:
                 continue
 
-            # SHIFT => minus (0.5,0.5)
+            # SHIFT => minus (0.5, 0.5)
             shifted = all_xy - 0.5
 
             # keep Q1 => x>0,y>0
@@ -194,21 +190,17 @@ class ShapeToSpectraModel(nn.Module):
 def replicate_c4(points):
     """
     Given Q1 points (x>0,y>0),
-    replicate them to get symmetrical shape in all 4 quadrants
-    by a 90° rotation each time:
-       (x,  y) -> (-y,  x) -> (-x, -y) -> (y, -x).
+    replicate them to get symmetrical shape in all 4 quadrants.
+    (x,y)->(±x,±y)
+    Returns array with 4*N points.
     """
-    c4 = []
-    for (x,y) in points:
-        # original Q1 => (x, y)
-        c4.append([ x,  y])    # 0° rotation
-        # 90° => (-y, x)
-        c4.append([-y,  x])
-        # 180° => (-x, -y)
-        c4.append([-x, -y])
-        # 270° => (y, -x)
-        c4.append([ y, -x])
-    return np.array(c4, dtype=np.float32)
+    mirrored = []
+    for (xx,yy) in points:
+        mirrored.append([ xx,  yy])  # Q1
+        mirrored.append([-xx,  yy])  # Q2
+        mirrored.append([-xx, -yy])  # Q3
+        mirrored.append([ xx, -yy])  # Q4
+    return np.array(mirrored, dtype=np.float32)
 
 def sort_points_by_angle(points):
     """
@@ -267,8 +259,6 @@ def visualize_4x3_samples(model, ds_val, device, out_dir=".", seed=1234):
       col1 => GT spectra
       col2 => shape (c4 filled) with GT in green, placeholder in red
       col3 => GT vs predicted spectra
-
-    Middle plot: fix the axis range to [-0.5,0.5].
     """
     import random
     random.seed(seed)
@@ -316,8 +306,6 @@ def visualize_4x3_samples(model, ds_val, device, out_dir=".", seed=1234):
                 plot_polygon(axM, c4_pts_sorted, color='green', alpha=0.4, fill=True)
                 # "pred shape" in red = placeholder
                 plot_polygon(axM, c4_pts_sorted, color='red', alpha=0.2, fill=False)
-            axM.set_xlim([-0.5, 0.5])
-            axM.set_ylim([-0.5, 0.5])
             axM.set_aspect("equal","box")
             axM.grid(True)
             axM.set_title("Shape c4 fill (GT green, Pred red)")
@@ -352,13 +340,6 @@ def train_shape2spectrum(
     nhead=4,
     num_layers=2
 ):
-    """
-    Train shape->spectrum model on the data. 
-    The 'out_dir' will have a datetime suffix appended.
-    """
-    # Append datetime suffix to out_dir
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = f"{out_dir}_{timestamp}"
     os.makedirs(out_dir, exist_ok=True)
 
     # 1) Dataset
@@ -421,7 +402,6 @@ def train_shape2spectrum(
         val_losses.append(avg_val)
         scheduler.step(avg_val)
 
-        # print progress
         if (epoch+1) % 20 == 0 or epoch == 0 or epoch == (num_epochs-1):
             print(f"Epoch[{epoch+1}/{num_epochs}] => trainMSE={avg_train:.4f}, valMSE={avg_val:.4f}")
 
