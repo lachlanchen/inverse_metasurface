@@ -188,7 +188,7 @@ for i, row in ipairs(mat_data) do
     -- Create S4 simulation
     S = S4.NewSimulation()
     S:SetLattice({1,0}, {0,1})  -- or however your period is set
-    S:SetNumG(80)               -- plane-wave expansions
+    S:SetNumG(40)               -- plane-wave expansions
 
     local matname = string.format("MatC%.1f", c_value)
     S:AddMaterial("Vacuum", {1,0})
