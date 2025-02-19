@@ -97,7 +97,7 @@ def differentiable_legal_shape(raw_params):
 def main():
     # Initialize raw_params as a random 4x3 tensor.
     # For the vertex presence column, use larger values so that sigmoid yields values near 1.
-    raw_v_pres = torch.rand(4, 1) + 2.0
+    raw_v_pres = torch.rand(4, 1) + torch.tensor([[2.0],[0.0],[0.0],[0.0]])
     other_cols = torch.rand(4, 2)
     raw_params = torch.cat([raw_v_pres, other_cols], dim=1)
     raw_params.requires_grad_()  # set requires_grad after creation
