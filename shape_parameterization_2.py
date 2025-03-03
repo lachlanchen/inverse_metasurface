@@ -80,7 +80,7 @@ def differentiable_legal_shape(raw_params, raw_shift):
 def main():
     # Initialize raw_params as a random 4×2 tensor.
     # For vertex presence, bias values high so that sigmoid(raw_v_pres) is near 1.
-    raw_v_pres = torch.rand(4, 1) + 2.0
+    raw_v_pres = torch.rand(4, 1)  + torch.tensor([[2.0],[0.0],[0.0],[0.0]])
     raw_radius = torch.rand(4, 1)  # raw radius values
     raw_params = torch.cat([raw_v_pres, raw_radius], dim=1)
     raw_params.requires_grad_()  # set requires_grad
