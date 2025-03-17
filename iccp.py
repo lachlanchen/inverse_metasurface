@@ -312,12 +312,12 @@ class HyperspectralAutoencoder(nn.Module):
 
         # Decoder: Simple convolutional network to reconstruct 100 bands from 11
         self.decoder = nn.Sequential(
-            # nn.Conv2d(11, 100, kernel_size=3, padding=1),
-            nn.Conv2d(11, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 100, kernel_size=3, padding=1)
+            nn.Conv2d(11, 100, kernel_size=3, padding=1),
+            # nn.Conv2d(11, 32, kernel_size=3, padding=1),
+            # nn.ReLU(),
+            # nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            # nn.ReLU(),
+            # nn.Conv2d(64, 100, kernel_size=3, padding=1)
         )
 
     def get_current_shape(self):
