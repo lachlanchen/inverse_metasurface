@@ -36,7 +36,7 @@ def load_aviris_data(aviris_path, tile_size=100, num_bands=100):
         alternative_paths = [
             os.path.join(base_dir, aviris_path),
             # Try some variations of the path
-            os.path.join(base_dir, "AVIRIS", "AV320231008t173943_L2A_OE_main_98b13fff", "AV320231008t173943_L2A_OE_main_98b13fff_RFL_ORT.hdr"),
+            os.path.join(base_dir, "f190808t01p00r19rdn_e", "f190808t01p00r19rdn_e_sc01_ort_img.hdr"),
             os.path.join("AVIRIS", "AV320231008t173943_L2A_OE_main_98b13fff", "AV320231008t173943_L2A_OE_main_98b13fff_RFL_ORT.hdr"),
             # Try without any directory structure
             "AV320231008t173943_L2A_OE_main_98b13fff_RFL_ORT.hdr"
@@ -288,84 +288,106 @@ def differentiable_legal_shape(raw_params, raw_shift):
 
 # Hyperspectral Autoencoder that uses shape2spectrum as filters
 class HyperspectralAutoencoder(nn.Module):
-    def __init__(self, shape2spec_model_path):
+    def __init__(self, shape2spec_model_path, target_snr=40):
         super().__init__()
 
-        # Load the pretrained shape2spectrum model
+        # 目标信噪比（单位 dB）作为模型参数
+        self.target_snr = target_snr
+
+        # 加载预训练的 shape2spectrum 模型
         self.shape2spec = ShapeToSpectraModel()
         self.shape2spec.load_state_dict(torch.load(shape2spec_model_path, map_location='cpu'))
 
-        # Freeze the shape2spectrum model
+        # 冻结 shape2spectrum 模型参数
         for param in self.shape2spec.parameters():
             param.requires_grad = False
 
-        # Shape parameters (learnable)
-        # Initialize with values that will produce a reasonable initial shape
+        # 可学习的形状参数，初始化时赋予较合理的初始形状值
         self.raw_params = nn.Parameter(torch.tensor([
-            [2.0, 0.0],  # First vertex active with medium radius
-            [2.0, 0.0],  # 50/50 chance for second vertex
-            [2.0, 0.0],  # 50/50 chance for third vertex
-            [2.0, 0.0]   # 50/50 chance for fourth vertex
+            [2.0, 0.0],  # 第一个顶点，半径适中
+            [2.0, 0.0],  # 第二个顶点，50/50 概率激活
+            [2.0, 0.0],  # 第三个顶点，50/50 概率激活
+            [2.0, 0.0]   # 第四个顶点，50/50 概率激活
         ], dtype=torch.float32))
-
         self.raw_shift = nn.Parameter(torch.tensor([0.0], dtype=torch.float32))
 
-        # Decoder: Simple convolutional network to reconstruct 100 bands from 11
+        # Decoder：使用 6 个 1x1 卷积层，每层之间使用 ReLU 激活，
+        # 将 11 个波段重构为 100 个波段。前 5 层隐藏通道数为 64，最后一层输出 100 个通道。
         self.decoder = nn.Sequential(
-            nn.Conv2d(11, 100, kernel_size=3, padding=1),
-            # nn.Conv2d(11, 32, kernel_size=3, padding=1),
-            # nn.ReLU(),
-            # nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            # nn.ReLU(),
-            # nn.Conv2d(64, 100, kernel_size=3, padding=1)
+            # nn.Conv2d(11, 100, kernel_size=3, padding=1),
+            nn.Conv2d(11, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 100, kernel_size=3, padding=1)
         )
 
     def get_current_shape(self):
-        """Return the current shape tensor based on learnable parameters"""
+        """基于可学习参数返回当前形状张量"""
         return differentiable_legal_shape(self.raw_params, self.raw_shift)
 
     def get_current_filters(self):
-        """Get the current spectral filters from the shape2spec model"""
-        shape = self.get_current_shape().unsqueeze(0)  # Add batch dimension
-        # When freezing decoder, we still need to allow gradients to flow back to shape parameters
-        filters = self.shape2spec(shape)[0]  # Remove batch dimension: 11 x 100
+        """通过 shape2spec 模型获取当前光谱滤波器"""
+        shape = self.get_current_shape().unsqueeze(0)  # 添加 batch 维度
+        filters = self.shape2spec(shape)[0]  # 移除 batch 维度: 11 x 100
         return filters
+
+    def add_noise(self, tensor):
+        """
+        向 tensor 添加高斯白噪声，噪声水平由目标信噪比 self.target_snr 决定。
+        计算信号功率时使用 detach() 来防止噪声计算参与梯度传播。
+        """
+        # 计算信号功率（均值平方），并使用 detach() 分离计算图
+        signal_power = tensor.detach().pow(2).mean()
+        # 将信号功率转换为分贝
+        signal_power_db = 10 * torch.log10(signal_power)
+        # 计算噪声功率（分贝）
+        noise_power_db = signal_power_db - self.target_snr
+        # 将噪声功率转换回线性尺度
+        noise_power = 10 ** (noise_power_db / 10)
+        # 生成与输入 tensor 形状相同的高斯白噪声
+        noise = torch.randn_like(tensor) * torch.sqrt(noise_power)
+        # 返回添加噪声后的 tensor
+        return tensor + noise
 
     def forward(self, x):
         """
-        Forward pass of the autoencoder
-        Input: x - Hyperspectral data of shape [batch_size, height, width, 100]
+        Autoencoder 的前向传播
+        输入：x - 形状为 [batch_size, height, width, 100] 的高光谱数据
         """
-        # Get dimensions
+        # 获取输入数据尺寸
         batch_size, height, width, spectral_bands = x.shape
 
-        # Get spectral filters from shape2spec
-        filters = self.get_current_filters()  # Shape: [11, 100]
+        # 从 shape2spec 模型获取光谱滤波器
+        filters = self.get_current_filters()  # 形状: [11, 100]
 
-        # Convert input from [B,H,W,C] to [B,C,H,W] format for PyTorch convolution
+        # 将输入数据从 [B, H, W, C] 转换为 [B, C, H, W] (符合 PyTorch 卷积要求)
         x_channels_first = x.permute(0, 3, 1, 2)
 
-        # Normalize filters
-        filters_normalized = filters / 100.0  # Shape: [11, 100]
+        # 滤波器归一化
+        filters_normalized = filters / 100.0  # 形状: [11, 100]
 
-        # Use efficient tensor operations for spectral filtering
-        # Einstein summation: 'bchw,oc->bohw'
-        # This performs the weighted sum across spectral dimension for each output band
+        # 使用爱因斯坦求和进行光谱滤波
         encoded_channels_first = torch.einsum('bchw,oc->bohw', x_channels_first, filters_normalized)
+        
+        # ----------------- 添加噪声 ------------------
+        encoded_channels_first = self.add_noise(encoded_channels_first)
+        # ----------------------------------------------
 
-        # Convert encoded data back to channels-last format [B,H,W,C]
+        # 将编码数据转换回 [B, H, W, C] 格式
         encoded = encoded_channels_first.permute(0, 2, 3, 1)
 
-        # Decode: use the CNN decoder to expand from 11 to 100 bands
+        # 使用 CNN 解码器将 11 个通道扩展回 100 个波段
         decoded_channels_first = self.decoder(encoded_channels_first)
 
-        # Convert back to original format [B,H,W,C]
+        # 转换回原始格式 [B, H, W, C]
         decoded = decoded_channels_first.permute(0, 2, 3, 1)
 
         return decoded, encoded
 
+
 # Training and visualization
-def train_and_visualize_autoencoder(model_path, output_dir, batch_size=10, num_epochs=500,
+def train_and_visualize_autoencoder(model_path, output_dir, batch_size=10, num_epochs=300,
                               learning_rate=0.001, freeze_decoder=False, alternating_freeze=True,
                               freeze_interval=10):
     """

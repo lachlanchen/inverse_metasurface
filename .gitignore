@@ -10,3 +10,5 @@ quoted*/
 # 忽略大文件或目录
 f170509t01p00r03.tar.gz
 f170509t01p00r03rdn_e/*
+AVIRIS/*
+hyperspectral*/
