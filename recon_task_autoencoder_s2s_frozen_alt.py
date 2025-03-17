@@ -167,8 +167,11 @@ def differentiable_legal_shape(raw_params, raw_shift):
 
 # Hyperspectral Autoencoder that uses shape2spectrum as filters
 class HyperspectralAutoencoder(nn.Module):
-    def __init__(self, shape2spec_model_path):
+    def __init__(self, shape2spec_model_path, target_snr=20):
         super().__init__()
+
+        # 目标信噪比（单位 dB）作为模型参数
+        self.target_snr = target_snr
         
         # Load the pretrained shape2spectrum model
         self.shape2spec = ShapeToSpectraModel()
@@ -191,12 +194,12 @@ class HyperspectralAutoencoder(nn.Module):
         
         # Decoder: Simple convolutional network to reconstruct 100 bands from 11
         self.decoder = nn.Sequential(
-            nn.Conv2d(11, 100, kernel_size=3, padding=1),
-            # nn.Conv2d(11, 32, kernel_size=3, padding=1),
-            # nn.ReLU(),
-            # nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            # nn.ReLU(),
-            # nn.Conv2d(64, 100, kernel_size=3, padding=1)
+            # nn.Conv2d(11, 100, kernel_size=3, padding=1),
+            nn.Conv2d(11, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 100, kernel_size=3, padding=1)
         )
     
     def get_current_shape(self):
@@ -209,6 +212,24 @@ class HyperspectralAutoencoder(nn.Module):
         # When freezing decoder, we still need to allow gradients to flow back to shape parameters
         filters = self.shape2spec(shape)[0]  # Remove batch dimension: 11 x 100
         return filters
+
+    def add_noise(self, tensor):
+        """
+        向 tensor 添加高斯白噪声，噪声水平由目标信噪比 self.target_snr 决定。
+        计算信号功率时使用 detach() 来防止噪声计算参与梯度传播。
+        """
+        # 计算信号功率（均值平方），并使用 detach() 分离计算图
+        signal_power = tensor.detach().pow(2).mean()
+        # 将信号功率转换为分贝
+        signal_power_db = 10 * torch.log10(signal_power)
+        # 计算噪声功率（分贝）
+        noise_power_db = signal_power_db - self.target_snr
+        # 将噪声功率转换回线性尺度
+        noise_power = 10 ** (noise_power_db / 10)
+        # 生成与输入 tensor 形状相同的高斯白噪声
+        noise = torch.randn_like(tensor) * torch.sqrt(noise_power)
+        # 返回添加噪声后的 tensor
+        return tensor + noise
     
     def forward(self, x):
         """
@@ -245,7 +266,9 @@ class HyperspectralAutoencoder(nn.Module):
         # Einstein summation: 'bchw,oc->bohw'
         # This performs the weighted sum across spectral dimension for each output band
         encoded_channels_first = torch.einsum('bchw,oc->bohw', x_channels_first, filters_normalized)
-        
+
+        # ----------------- 添加噪声 ------------------
+        encoded_channels_first = self.add_noise(encoded_channels_first)
         
         # Convert encoded data back to channels-last format [B,H,W,C]
         encoded = encoded_channels_first.permute(0, 2, 3, 1)
