@@ -1,9 +1,15 @@
 *.txt
 *.csv
+
 *.png
 *.jpg
+
 *.pt
+*.npz
 *.zip
+
 merged*/
 quoted*/
-*.npz
+
+AVIRIS/*
+hyperspectral_autoencoder*/
