@@ -977,8 +977,8 @@ def main():
     os.makedirs(os.path.dirname(args.cache), exist_ok=True)
     
     # Define noise levels to test (in dB)
-    # noise_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40]
-    noise_levels = [0, 20]#, 10, 15, 20, 25, 30, 35, 40]
+    noise_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40]
+    # noise_levels = [0, 20]#, 10, 15, 20, 25, 30, 35, 40]
     
     # Dictionary to store paths to initial and final shapes for each noise level
     shape_paths = {}
