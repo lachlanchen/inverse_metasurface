@@ -7,6 +7,8 @@
 *.pt
 *.npz
 *.zip
+*.tar.gz
+*.gz
 
 merged*/
 quoted*/
