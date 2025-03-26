@@ -8,9 +8,13 @@
 *.npz
 *.npy
 *.zip
+*.tar.gz
+*.gz
 
 merged*/
 quoted*/
 
 AVIRIS/*
+AVIRIS*/*
 hyperspectral_autoencoder*/
+noise_experiment*/
