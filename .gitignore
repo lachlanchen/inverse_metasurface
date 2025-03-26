@@ -6,6 +6,7 @@
 
 *.pt
 *.npz
+*.npy
 *.zip
 
 merged*/
