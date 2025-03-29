@@ -558,7 +558,7 @@ class HyperspectralAutoencoder(nn.Module):
         
         # Normalize filters
         # filters_normalized = filters / 100.0  # Shape: [11, 100]
-        filters_normalized = filters / 10.0  # Shape: [11, 100]
+        filters_normalized = filters / 50.0  # Shape: [11, 100]
         
         # Use efficient tensor operations for spectral filtering
         # Einstein summation: 'bchw,oc->bohw'
