@@ -226,30 +226,32 @@ def generate_initial_filter(device=None):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Create a base 11x100 filter
-    filter_params = torch.zeros(11, 100, device=device)
+    # # Create a base 11x100 filter
+    # filter_params = torch.zeros(11, 100, device=device)
     
-    # Add some structured patterns for different rows
-    for i in range(11):
-        # Create different patterns for different rows
-        if i % 3 == 0:  
-            # High frequency pattern
-            for j in range(100):
-                filter_params[i, j] = 0.5 + 0.4 * np.sin(j/5 + i/3)
-        elif i % 3 == 1:  
-            # Medium frequency pattern
-            for j in range(100):
-                filter_params[i, j] = 0.5 + 0.4 * np.sin(j/10 + i/2)
-        else:  
-            # Low frequency pattern
-            for j in range(100):
-                filter_params[i, j] = 0.5 + 0.4 * np.sin(j/20 + i)
+    # # Add some structured patterns for different rows
+    # for i in range(11):
+    #     # Create different patterns for different rows
+    #     if i % 3 == 0:  
+    #         # High frequency pattern
+    #         for j in range(100):
+    #             filter_params[i, j] = 0.5 + 0.4 * np.sin(j/5 + i/3)
+    #     elif i % 3 == 1:  
+    #         # Medium frequency pattern
+    #         for j in range(100):
+    #             filter_params[i, j] = 0.5 + 0.4 * np.sin(j/10 + i/2)
+    #     else:  
+    #         # Low frequency pattern
+    #         for j in range(100):
+    #             filter_params[i, j] = 0.5 + 0.4 * np.sin(j/20 + i)
     
-    # Add some random noise for diversity
-    filter_params += 0.1 * torch.randn_like(filter_params)
+    # # Add some random noise for diversity
+    # filter_params += 0.1 * torch.randn_like(filter_params)
     
-    # Ensure all values are reasonable (avoiding extremely large values)
-    filter_params = torch.clamp(filter_params, -2.0, 2.0)
+    # # Ensure all values are reasonable (avoiding extremely large values)
+    # filter_params = torch.clamp(filter_params, -2.0, 2.0)
+
+    filter_params = torch.rand(11, 100, device=device)
     
     return filter_params
 
@@ -504,25 +506,25 @@ class HyperspectralAutoencoder(nn.Module):
         # Create the filter2shape2filter pipeline
         self.pipeline = Filter2ShapeFrozen(self.filter2shape, self.shape2filter, no_grad_frozen=True)
         
-        # # Initialize learnable filter parameters (11 x 100)
-        # # Use provided initial parameters if available, otherwise generate new ones
-        # if initial_filter_params is not None:
-        #     self.filter_params = nn.Parameter(initial_filter_params.clone().to(self.device))
-        # else:
-        #     # Default to random initialization
-        #     self.filter_params = nn.Parameter(torch.rand(11, 100, device=self.device))
-
         # Initialize learnable filter parameters (11 x 100)
         # Use provided initial parameters if available, otherwise generate new ones
         if initial_filter_params is not None:
-            # Pass through pipeline to get reconstructed filters
-            _, recon_filters = self.pipeline(initial_filter_params.unsqueeze(0).clone().to(self.device))
-            self.filter_params = nn.Parameter(recon_filters[0])  # Use [0] to remove batch dimension
+            self.filter_params = nn.Parameter(initial_filter_params.clone().to(self.device))
         else:
             # Default to random initialization
-            init_random = torch.rand(1, 11, 100, device=self.device)
-            _, recon_filters = self.pipeline(init_random)
-            self.filter_params = nn.Parameter(recon_filters[0])  # Use [0] to remove batch dimension
+            self.filter_params = nn.Parameter(torch.rand(11, 100, device=self.device))
+
+        # # Initialize learnable filter parameters (11 x 100)
+        # # Use provided initial parameters if available, otherwise generate new ones
+        # if initial_filter_params is not None:
+        #     # Pass through pipeline to get reconstructed filters
+        #     _, recon_filters = self.pipeline(initial_filter_params.unsqueeze(0).clone().to(self.device))
+        #     self.filter_params = nn.Parameter(recon_filters[0])  # Use [0] to remove batch dimension
+        # else:
+        #     # Default to random initialization
+        #     init_random = torch.rand(1, 11, 100, device=self.device)
+        #     _, recon_filters = self.pipeline(init_random)
+        #     self.filter_params = nn.Parameter(recon_filters[0])  # Use [0] to remove batch dimension
         
         # Decoder: 3-layer convolutional network
         self.decoder = nn.Sequential(
