@@ -191,7 +191,7 @@ class LinearEncoder(nn.Module):
         
         if self.use_fsf and self.pipeline is not None:
             # Run filter through pipeline to get shape and reconstructed filter
-            shape_pred, filter_output = self.pipeline(self.filter_H.unsqueeze(0))
+            shape_pred, filter_output = self.pipeline(self.filter_A.unsqueeze(0))
             
             # Store for visualization
             self.current_shape = shape_pred[0].detach().cpu()

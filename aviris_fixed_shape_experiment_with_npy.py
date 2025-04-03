@@ -105,7 +105,7 @@ class LinearEncoder(nn.Module):
         super(LinearEncoder, self).__init__()
         self.filter_H = nn.Parameter(torch.randn(out_dim, in_dim))
         # Initialize with values between 0 and 1
-        nn.init.uniform_(self.filter_H, 0., 1.)
+        # nn.init.uniform_(self.filter_H, 0., 1.)
         
         self.use_fsf = use_fsf
         self.filter_scale_factor = filter_scale_factor
@@ -156,7 +156,7 @@ class LinearEncoder(nn.Module):
         
         if self.use_fsf and self.pipeline is not None:
             # Run filter through pipeline to get shape and reconstructed filter
-            shape_pred, filter_output = self.pipeline(self.filter_H.unsqueeze(0))
+            shape_pred, filter_output = self.pipeline(self.filter_A.unsqueeze(0))
             
             # Store for visualization
             self.current_shape = shape_pred[0].detach().cpu()

@@ -341,7 +341,7 @@ def process_and_cache_data(args):
         return cache_file
     
     # Get input directories
-    base_dir = "AVIRIS_SIMPLE_SELECT"
+    base_dir = "AVIRIS_FOREST_SIMPLE_SELECT"
     if args.folder == "all":
         subfolders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
     else:

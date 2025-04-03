@@ -17,8 +17,8 @@ import seaborn as sns
 
 # Define paths using actual directories from the system
 BASE_DIR = os.path.expanduser("~/ProjectsLFS/iccp_rcwa/S4/iccp_test")
-DATA_DIR = os.path.join(BASE_DIR, "AVIRIS")
-OUTPUT_DIR = os.path.join(BASE_DIR, "AVIRIS_RAW_ANALYSIS")
+DATA_DIR = os.path.join(BASE_DIR, "AVIRIS_FOREST")
+OUTPUT_DIR = os.path.join(BASE_DIR, "AVIRIS_FOREST_RAW_ANALYSIS")
 
 # Number of random pixels to select for spectrum plots
 NUM_RANDOM_PIXELS = 10
