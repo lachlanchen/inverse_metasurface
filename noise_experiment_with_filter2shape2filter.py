@@ -104,7 +104,7 @@ class Filter2ShapeVarLen(nn.Module):
         final_shape = torch.cat([presence_stack.unsqueeze(-1), xy_final], dim=-1)
         return final_shape
 
-class Filter2ShapeFrozen(nn.Module):
+class Filter2Shape2FilterFrozen(nn.Module):
     def __init__(self, filter2shape_net, shape2filter_frozen, no_grad_frozen=True):
         """
         no_grad_frozen: if True, the frozen shape2filter network is computed in a no_grad block.
@@ -119,11 +119,13 @@ class Filter2ShapeFrozen(nn.Module):
         for p in self.shape2filter_frozen.parameters():
             p.requires_grad = False
     def forward(self, spec_input):
-        shape_pred = self.filter2shape(spec_input)
+        
         if self.no_grad_frozen:
             with torch.no_grad():
+                shape_pred = self.filter2shape(spec_input)
                 spec_chain = self.shape2filter_frozen(shape_pred)
         else:
+            shape_pred = self.filter2shape(spec_input)
             spec_chain = self.shape2filter_frozen(shape_pred)
         return shape_pred, spec_chain
 
@@ -504,7 +506,7 @@ class HyperspectralAutoencoder(nn.Module):
             param.requires_grad = False
         
         # Create the filter2shape2filter pipeline
-        self.pipeline = Filter2ShapeFrozen(self.filter2shape, self.shape2filter, no_grad_frozen=True)
+        self.pipeline = Filter2Shape2FilterFrozen(self.filter2shape, self.shape2filter, no_grad_frozen=True)
         
         # Initialize learnable filter parameters (11 x 100)
         # Use provided initial parameters if available, otherwise generate new ones
