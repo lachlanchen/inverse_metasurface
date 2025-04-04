@@ -22,3 +22,6 @@ noise_experiment*/
 *.not_finished
 
 *.json
+cache*
+results*
+*experiments*
