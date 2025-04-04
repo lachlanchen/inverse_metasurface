@@ -809,31 +809,66 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         'test_sam': []
     }
     
-    # Get sample batch for visualization
-    train_sample = next(iter(train_loader))
-    if isinstance(train_sample, list) or isinstance(train_sample, tuple):
-        train_sample = train_sample[0]
-    train_sample = train_sample[:1].to(device)
+    # # Get sample batch for visualization
+    # train_sample = next(iter(train_loader))
+    # if isinstance(train_sample, list) or isinstance(train_sample, tuple):
+    #     train_sample = train_sample[0]
+    # train_sample = train_sample[:1].to(device)
     
-    test_sample = next(iter(test_loader))
-    if isinstance(test_sample, list) or isinstance(test_sample, tuple):
-        test_sample = test_sample[0]
-    test_sample = test_sample[:1].to(device)
+    # test_sample = next(iter(test_loader))
+    # if isinstance(test_sample, list) or isinstance(test_sample, tuple):
+    #     test_sample = test_sample[0]
+    # test_sample = test_sample[:1].to(device)
     
-    # Initial visualization and metrics
-    model.eval()
-    with torch.no_grad():
-        # Train sample
-        train_recon, _ = model(train_sample, add_noise=False)
-        train_mse = ((train_recon - train_sample) ** 2).mean().item()
-        train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-        train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
+    # # Initial visualization and metrics
+    # model.eval()
+    # with torch.no_grad():
+    #     # Train sample
+    #     train_recon, _ = model(train_sample, add_noise=False)
+    #     train_mse = ((train_recon - train_sample) ** 2).mean().item()
+    #     train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
+    #     train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
         
-        # Test sample
-        test_recon, _ = model(test_sample, add_noise=False)
-        test_mse = ((test_recon - test_sample) ** 2).mean().item()
-        test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-        test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+    #     # Test sample
+    #     test_recon, _ = model(test_sample, add_noise=False)
+    #     test_mse = ((test_recon - test_sample) ** 2).mean().item()
+    #     test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
+    #     test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+
+    # Get representative samples for visualization
+    train_viz_sample = next(iter(train_loader))
+    if isinstance(train_viz_sample, list) or isinstance(train_viz_sample, tuple):
+        train_viz_sample = train_viz_sample[0]
+    train_viz_sample = train_viz_sample[:1].to(device)
+
+    test_viz_sample = next(iter(test_loader))
+    if isinstance(test_viz_sample, list) or isinstance(test_viz_sample, tuple):
+        test_viz_sample = test_viz_sample[0]
+    test_viz_sample = test_viz_sample[:1].to(device)
+
+    # Prepare full datasets for metrics calculation
+    full_train_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
+                              for batch in train_loader], dim=0)
+    full_test_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
+                             for batch in test_loader], dim=0)
+
+    # Initial metrics calculation on full datasets
+    model.eval()
+    # Calculate metrics on full training set
+    train_mse, train_psnr, train_sam = calculate_metrics_in_batch(
+        full_train_data, model, batch_size=batch_size, device=device,
+        desc=f"Calculating initial {shape_name} train metrics")
+
+    # Calculate metrics on full test set
+    test_mse, test_psnr, test_sam = calculate_metrics_in_batch(
+        full_test_data, model, batch_size=batch_size, device=device,
+        desc=f"Calculating initial {shape_name} test metrics")
+
+    # Generate visualizations with a single sample
+    with torch.no_grad():
+        # Get reconstruction for visualization
+        train_viz_recon, _ = model(train_viz_sample, add_noise=False)
+        test_viz_recon, _ = model(test_viz_sample, add_noise=False)
     
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
@@ -936,20 +971,37 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Calculate average training loss
         avg_train_loss = train_epoch_loss / num_batches
         
-        # Evaluation phase
-        model.eval()
-        with torch.no_grad():
-            # Evaluate on train sample (without noise for clean comparison)
-            train_recon, _ = model(train_sample, add_noise=False)
-            train_mse = ((train_recon - train_sample) ** 2).mean().item()
-            train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-            train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
+        # # Evaluation phase
+        # model.eval()
+        # with torch.no_grad():
+        #     # Evaluate on train sample (without noise for clean comparison)
+        #     train_recon, _ = model(train_sample, add_noise=False)
+        #     train_mse = ((train_recon - train_sample) ** 2).mean().item()
+        #     train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
+        #     train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
             
-            # Evaluate on test sample (without noise for clean comparison)
-            test_recon, _ = model(test_sample, add_noise=False)
-            test_mse = ((test_recon - test_sample) ** 2).mean().item()
-            test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-            test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+        #     # Evaluate on test sample (without noise for clean comparison)
+        #     test_recon, _ = model(test_sample, add_noise=False)
+        #     test_mse = ((test_recon - test_sample) ** 2).mean().item()
+        #     test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
+        #     test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+        # Initial metrics calculation on full datasets
+        model.eval()
+        # Calculate metrics on full training set
+        train_mse, train_psnr, train_sam = calculate_metrics_in_batch(
+            full_train_data, model, batch_size=batch_size, device=device,
+            desc=f"Calculating initial {shape_name} train metrics")
+
+        # Calculate metrics on full test set
+        test_mse, test_psnr, test_sam = calculate_metrics_in_batch(
+            full_test_data, model, batch_size=batch_size, device=device,
+            desc=f"Calculating initial {shape_name} test metrics")
+
+        # Generate visualizations with a single sample
+        with torch.no_grad():
+            # Get reconstruction for visualization
+            train_viz_recon, _ = model(train_viz_sample, add_noise=False)
+            test_viz_recon, _ = model(test_viz_sample, add_noise=False)
             
             # Test set evaluation
             test_loss = 0.0
