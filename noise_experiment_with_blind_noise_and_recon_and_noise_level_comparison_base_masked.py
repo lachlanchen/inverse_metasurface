@@ -26,98 +26,103 @@ from noise_experiment_with_blind_noise import (
 )
 
 
+from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base import (
+    calculate_psnr, calculate_sam, visualize_reconstruction, visualize_reconstruction_spectrum
+)
+
 from AWAN import AWAN
 latent_dim = 11
 in_channels = 100
 
 
 
+
 ###############################################################################
 # METRICS FUNCTIONS
 ###############################################################################
-def calculate_psnr(original, reconstructed, data_range=1.0):
-    """
-    Calculate Peak Signal-to-Noise Ratio (PSNR) between original and reconstructed images.
+# def calculate_psnr(original, reconstructed, data_range=1.0):
+#     """
+#     Calculate Peak Signal-to-Noise Ratio (PSNR) between original and reconstructed images.
     
-    Parameters:
-    original: Original image tensor
-    reconstructed: Reconstructed image tensor
-    data_range: The data range of the input image (default: 1.0 for normalized images)
+#     Parameters:
+#     original: Original image tensor
+#     reconstructed: Reconstructed image tensor
+#     data_range: The data range of the input image (default: 1.0 for normalized images)
     
-    Returns:
-    float: PSNR value in dB
-    """
-    # Ensure tensors are on CPU and converted to numpy arrays
-    if isinstance(original, torch.Tensor):
-        original = original.detach().cpu().numpy()
-    if isinstance(reconstructed, torch.Tensor):
-        reconstructed = reconstructed.detach().cpu().numpy()
+#     Returns:
+#     float: PSNR value in dB
+#     """
+#     # Ensure tensors are on CPU and converted to numpy arrays
+#     if isinstance(original, torch.Tensor):
+#         original = original.detach().cpu().numpy()
+#     if isinstance(reconstructed, torch.Tensor):
+#         reconstructed = reconstructed.detach().cpu().numpy()
     
-    # Calculate MSE
-    mse = np.mean((original - reconstructed) ** 2)
+#     # Calculate MSE
+#     mse = np.mean((original - reconstructed) ** 2)
     
-    # Avoid division by zero
-    if mse == 0:
-        return float('inf')
+#     # Avoid division by zero
+#     if mse == 0:
+#         return float('inf')
     
-    # Calculate PSNR
-    psnr = 20 * np.log10(data_range / np.sqrt(mse))
+#     # Calculate PSNR
+#     psnr = 20 * np.log10(data_range / np.sqrt(mse))
     
-    return psnr
+#     return psnr
 
-def calculate_sam(original, reconstructed, epsilon=1e-8):
-    """
-    Calculate Spectral Angle Mapper (SAM) between original and reconstructed images.
+# def calculate_sam(original, reconstructed, epsilon=1e-8):
+#     """
+#     Calculate Spectral Angle Mapper (SAM) between original and reconstructed images.
     
-    Parameters:
-    original: Original image tensor of shape [H, W, C] or [B, H, W, C]
-    reconstructed: Reconstructed image tensor of shape [H, W, C] or [B, H, W, C]
-    epsilon: Small value to avoid division by zero
+#     Parameters:
+#     original: Original image tensor of shape [H, W, C] or [B, H, W, C]
+#     reconstructed: Reconstructed image tensor of shape [H, W, C] or [B, H, W, C]
+#     epsilon: Small value to avoid division by zero
     
-    Returns:
-    float: Mean SAM value in radians
-    """
-    # Ensure tensors are on CPU and converted to numpy arrays
-    if isinstance(original, torch.Tensor):
-        original = original.detach().cpu().numpy()
-    if isinstance(reconstructed, torch.Tensor):
-        reconstructed = reconstructed.detach().cpu().numpy()
+#     Returns:
+#     float: Mean SAM value in radians
+#     """
+#     # Ensure tensors are on CPU and converted to numpy arrays
+#     if isinstance(original, torch.Tensor):
+#         original = original.detach().cpu().numpy()
+#     if isinstance(reconstructed, torch.Tensor):
+#         reconstructed = reconstructed.detach().cpu().numpy()
     
-    # Handle batch dimension if present
-    if len(original.shape) == 4:  # [B, H, W, C]
-        # Reshape to [B*H*W, C]
-        orig_reshaped = original.reshape(-1, original.shape[-1])
-        recon_reshaped = reconstructed.reshape(-1, reconstructed.shape[-1])
-    else:  # [H, W, C]
-        # Reshape to [H*W, C]
-        orig_reshaped = original.reshape(-1, original.shape[-1])
-        recon_reshaped = reconstructed.reshape(-1, reconstructed.shape[-1])
+#     # Handle batch dimension if present
+#     if len(original.shape) == 4:  # [B, H, W, C]
+#         # Reshape to [B*H*W, C]
+#         orig_reshaped = original.reshape(-1, original.shape[-1])
+#         recon_reshaped = reconstructed.reshape(-1, reconstructed.shape[-1])
+#     else:  # [H, W, C]
+#         # Reshape to [H*W, C]
+#         orig_reshaped = original.reshape(-1, original.shape[-1])
+#         recon_reshaped = reconstructed.reshape(-1, reconstructed.shape[-1])
     
-    # Calculate dot product for each pixel
-    dot_product = np.sum(orig_reshaped * recon_reshaped, axis=1)
+#     # Calculate dot product for each pixel
+#     dot_product = np.sum(orig_reshaped * recon_reshaped, axis=1)
     
-    # Calculate magnitudes
-    orig_mag = np.sqrt(np.sum(orig_reshaped ** 2, axis=1))
-    recon_mag = np.sqrt(np.sum(recon_reshaped ** 2, axis=1))
+#     # Calculate magnitudes
+#     orig_mag = np.sqrt(np.sum(orig_reshaped ** 2, axis=1))
+#     recon_mag = np.sqrt(np.sum(recon_reshaped ** 2, axis=1))
     
-    # Avoid division by zero
-    valid_pixels = (orig_mag > epsilon) & (recon_mag > epsilon)
+#     # Avoid division by zero
+#     valid_pixels = (orig_mag > epsilon) & (recon_mag > epsilon)
     
-    if not np.any(valid_pixels):
-        return 0.0  # All pixels are zeros
+#     if not np.any(valid_pixels):
+#         return 0.0  # All pixels are zeros
     
-    # Calculate cosine similarity
-    cos_sim = np.zeros_like(dot_product)
-    cos_sim[valid_pixels] = dot_product[valid_pixels] / (orig_mag[valid_pixels] * recon_mag[valid_pixels])
+#     # Calculate cosine similarity
+#     cos_sim = np.zeros_like(dot_product)
+#     cos_sim[valid_pixels] = dot_product[valid_pixels] / (orig_mag[valid_pixels] * recon_mag[valid_pixels])
     
-    # Clip to [-1, 1] to handle numerical errors
-    cos_sim = np.clip(cos_sim, -1.0, 1.0)
+#     # Clip to [-1, 1] to handle numerical errors
+#     cos_sim = np.clip(cos_sim, -1.0, 1.0)
     
-    # Calculate angle in radians
-    angles = np.arccos(cos_sim)
+#     # Calculate angle in radians
+#     angles = np.arccos(cos_sim)
     
-    # Return mean angle
-    return np.mean(angles)
+#     # Return mean angle
+#     return np.mean(angles)
 
 ###############################################################################
 # VISUALIZATION FUNCTIONS
@@ -192,140 +197,140 @@ def calculate_sam(original, reconstructed, epsilon=1e-8):
         
 #         return mse, psnr, sam
 
-def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=50):
-    """
-    Create visualization of original, reconstructed, and difference images with unified colorbar
-    for multiple samples and multiple spectral bands.
+# def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=50):
+#     """
+#     Create visualization of original, reconstructed, and difference images with unified colorbar
+#     for multiple samples and multiple spectral bands.
     
-    Parameters:
-    model: Model to use for reconstruction
-    sample_tensor: Input tensor to reconstruct (can handle multiple samples)
-    device: Device to use for computation
-    save_path: Path to save the visualization
-    band_idx: Index of spectral band to visualize (default: 50, middle of 100 bands)
-                (Will be used as one of the bands in multi-band visualization)
+#     Parameters:
+#     model: Model to use for reconstruction
+#     sample_tensor: Input tensor to reconstruct (can handle multiple samples)
+#     device: Device to use for computation
+#     save_path: Path to save the visualization
+#     band_idx: Index of spectral band to visualize (default: 50, middle of 100 bands)
+#                 (Will be used as one of the bands in multi-band visualization)
     
-    Returns:
-    tuple: (mse, psnr, sam) values averaged across all samples
-    """
-    # Define bands to visualize (including the specified band_idx)
-    band_indices = [5, 25, 50, 75, 95]
-    if band_idx not in band_indices:
-        band_indices.append(band_idx)
-        band_indices.sort()
+#     Returns:
+#     tuple: (mse, psnr, sam) values averaged across all samples
+#     """
+#     # Define bands to visualize (including the specified band_idx)
+#     band_indices = [5, 25, 50, 75, 95]
+#     if band_idx not in band_indices:
+#         band_indices.append(band_idx)
+#         band_indices.sort()
     
-    with torch.no_grad():
-        # Ensure sample is on the correct device
-        sample = sample_tensor.to(device)
+#     with torch.no_grad():
+#         # Ensure sample is on the correct device
+#         sample = sample_tensor.to(device)
         
-        # Get reconstruction
-        recon, _, snr = model(sample)
+#         # Get reconstruction
+#         recon, _, snr = model(sample)
         
-        # Convert SNR to a scalar if it's a tensor
-        if torch.is_tensor(snr):
-            snr = snr.item()
+#         # Convert SNR to a scalar if it's a tensor
+#         if torch.is_tensor(snr):
+#             snr = snr.item()
         
-        # Move tensors to CPU for visualization
-        sample_np = sample.cpu().numpy()  # Shape: [batch_size, H, W, C]
-        recon_np = recon.cpu().numpy()    # Shape: [batch_size, H, W, C]
+#         # Move tensors to CPU for visualization
+#         sample_np = sample.cpu().numpy()  # Shape: [batch_size, H, W, C]
+#         recon_np = recon.cpu().numpy()    # Shape: [batch_size, H, W, C]
         
-        # Calculate difference
-        diff_np = sample_np - recon_np
+#         # Calculate difference
+#         diff_np = sample_np - recon_np
         
-        # Initialize metrics storage
-        all_mse = []
-        all_psnr = []
-        all_sam = []
+#         # Initialize metrics storage
+#         all_mse = []
+#         all_psnr = []
+#         all_sam = []
         
-        # Process each sample
-        for sample_idx in range(sample_np.shape[0]):
-            # Calculate metrics for this sample
-            mse = ((sample_np[sample_idx] - recon_np[sample_idx]) ** 2).mean()
-            psnr = calculate_psnr(sample_np[sample_idx], recon_np[sample_idx])
-            sam = calculate_sam(sample_np[sample_idx], recon_np[sample_idx])
+#         # Process each sample
+#         for sample_idx in range(sample_np.shape[0]):
+#             # Calculate metrics for this sample
+#             mse = ((sample_np[sample_idx] - recon_np[sample_idx]) ** 2).mean()
+#             psnr = calculate_psnr(sample_np[sample_idx], recon_np[sample_idx])
+#             sam = calculate_sam(sample_np[sample_idx], recon_np[sample_idx])
             
-            # Store metrics
-            all_mse.append(mse)
-            all_psnr.append(psnr)
-            all_sam.append(sam)
+#             # Store metrics
+#             all_mse.append(mse)
+#             all_psnr.append(psnr)
+#             all_sam.append(sam)
             
-            # Create a figure for this sample with multiple bands
-            plt.figure(figsize=(15, 5 * len(band_indices)))
+#             # Create a figure for this sample with multiple bands
+#             plt.figure(figsize=(15, 5 * len(band_indices)))
             
-            # Process each band
-            for i, b_idx in enumerate(band_indices):
-                # Extract specific spectral band
-                sample_band = sample_np[sample_idx, :, :, b_idx]
-                recon_band = recon_np[sample_idx, :, :, b_idx]
-                diff_band = diff_np[sample_idx, :, :, b_idx]
+#             # Process each band
+#             for i, b_idx in enumerate(band_indices):
+#                 # Extract specific spectral band
+#                 sample_band = sample_np[sample_idx, :, :, b_idx]
+#                 recon_band = recon_np[sample_idx, :, :, b_idx]
+#                 diff_band = diff_np[sample_idx, :, :, b_idx]
                 
-                # Calculate global min and max for unified colormap
-                vmin = min(sample_band.min(), recon_band.min())
-                vmax = max(sample_band.max(), recon_band.max())
+#                 # Calculate global min and max for unified colormap
+#                 vmin = min(sample_band.min(), recon_band.min())
+#                 vmax = max(sample_band.max(), recon_band.max())
                 
-                # Calculate symmetric limits for difference
-                diff_abs_max = max(abs(diff_band.min()), abs(diff_band.max()))
+#                 # Calculate symmetric limits for difference
+#                 diff_abs_max = max(abs(diff_band.min()), abs(diff_band.max()))
                 
-                # Plot original
-                plt.subplot(len(band_indices), 3, 3*i + 1)
-                im1 = plt.imshow(sample_band, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title(f'Original (Band {b_idx})')
-                plt.colorbar(im1, fraction=0.046, pad=0.04)
+#                 # Plot original
+#                 plt.subplot(len(band_indices), 3, 3*i + 1)
+#                 im1 = plt.imshow(sample_band, cmap='viridis', vmin=vmin, vmax=vmax)
+#                 plt.title(f'Original (Band {b_idx})')
+#                 plt.colorbar(im1, fraction=0.046, pad=0.04)
                 
-                # Plot reconstruction
-                plt.subplot(len(band_indices), 3, 3*i + 2)
-                im2 = plt.imshow(recon_band, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title(f'Reconstructed (Band {b_idx})')
-                plt.colorbar(im2, fraction=0.046, pad=0.04)
+#                 # Plot reconstruction
+#                 plt.subplot(len(band_indices), 3, 3*i + 2)
+#                 im2 = plt.imshow(recon_band, cmap='viridis', vmin=vmin, vmax=vmax)
+#                 plt.title(f'Reconstructed (Band {b_idx})')
+#                 plt.colorbar(im2, fraction=0.046, pad=0.04)
                 
-                # Plot difference
-                plt.subplot(len(band_indices), 3, 3*i + 3)
-                im3 = plt.imshow(diff_band, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
-                plt.title(f'Difference (Band {b_idx})')
-                plt.colorbar(im3, fraction=0.046, pad=0.04)
+#                 # Plot difference
+#                 plt.subplot(len(band_indices), 3, 3*i + 3)
+#                 im3 = plt.imshow(diff_band, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+#                 plt.title(f'Difference (Band {b_idx})')
+#                 plt.colorbar(im3, fraction=0.046, pad=0.04)
             
-            # Add SNR information as a suptitle
-            plt.suptitle(f'Sample {sample_idx+1} - SNR: {snr:.2f} dB, PSNR: {psnr:.2f} dB, SAM: {sam:.4f} rad', fontsize=16)
+#             # Add SNR information as a suptitle
+#             plt.suptitle(f'Sample {sample_idx+1} - SNR: {snr:.2f} dB, PSNR: {psnr:.2f} dB, SAM: {sam:.4f} rad', fontsize=16)
             
-            # Adjust layout and save
-            plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for suptitle
+#             # Adjust layout and save
+#             plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for suptitle
             
-            # Create directory structure if needed
-            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+#             # Create directory structure if needed
+#             os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
             
-            # Save figure and data
-            sample_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}.png"
-            plt.savefig(sample_save_path, dpi=300, bbox_inches='tight')
-            plt.close()
+#             # Save figure and data
+#             sample_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}.png"
+#             plt.savefig(sample_save_path, dpi=300, bbox_inches='tight')
+#             plt.close()
             
-            # Save plot data for future reference
-            plot_data = {
-                'bands': {},
-                'metrics': {
-                    'mse': float(mse),
-                    'psnr': float(psnr),
-                    'sam': float(sam),
-                    'snr': float(snr)
-                }
-            }
+#             # Save plot data for future reference
+#             plot_data = {
+#                 'bands': {},
+#                 'metrics': {
+#                     'mse': float(mse),
+#                     'psnr': float(psnr),
+#                     'sam': float(sam),
+#                     'snr': float(snr)
+#                 }
+#             }
             
-            for b_idx in band_indices:
-                plot_data['bands'][str(b_idx)] = {
-                    'original': sample_np[sample_idx, :, :, b_idx].tolist(),
-                    'reconstructed': recon_np[sample_idx, :, :, b_idx].tolist(),
-                    'difference': diff_np[sample_idx, :, :, b_idx].tolist()
-                }
+#             for b_idx in band_indices:
+#                 plot_data['bands'][str(b_idx)] = {
+#                     'original': sample_np[sample_idx, :, :, b_idx].tolist(),
+#                     'reconstructed': recon_np[sample_idx, :, :, b_idx].tolist(),
+#                     'difference': diff_np[sample_idx, :, :, b_idx].tolist()
+#                 }
             
-            data_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}_data.json"
-            with open(data_save_path, 'w') as f:
-                json.dump(plot_data, f)
+#             data_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}_data.json"
+#             with open(data_save_path, 'w') as f:
+#                 json.dump(plot_data, f)
         
-        # For backward compatibility, return averaged metrics
-        avg_mse = sum(all_mse) / len(all_mse)
-        avg_psnr = sum(all_psnr) / len(all_psnr)
-        avg_sam = sum(all_sam) / len(all_sam)
+#         # For backward compatibility, return averaged metrics
+#         avg_mse = sum(all_mse) / len(all_mse)
+#         avg_psnr = sum(all_psnr) / len(all_psnr)
+#         avg_sam = sum(all_sam) / len(all_sam)
         
-        return avg_mse, avg_psnr, avg_sam
+#         return avg_mse, avg_psnr, avg_sam
 
 ###############################################################################
 # MODIFIED AUTOENCODER MODEL WITH RANDOM NOISE

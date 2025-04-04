@@ -327,6 +327,195 @@ def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=5
         
         return avg_mse, avg_psnr, avg_sam
 
+def visualize_reconstruction_spectrum(model, sample_tensor, device, save_path, band_idx=None):
+    """
+    Create visualization of original vs reconstructed spectra for selected pixels.
+    Maintains the same API as visualize_reconstruction for easy integration.
+    
+    Parameters:
+    model: Model to use for reconstruction
+    sample_tensor: Input tensor to reconstruct (can handle multiple samples)
+    device: Device to use for computation
+    save_path: Path to save the visualization
+    band_idx: Not used here, included for API compatibility
+    
+    Returns:
+    tuple: (mse, psnr, sam) values averaged across all samples
+    """
+    # Import common functions from the original script
+    from calculate_psnr import calculate_psnr
+    from calculate_sam import calculate_sam
+    
+    # Make sure the spectrum directory exists
+    spectrum_dir = os.path.join(os.path.dirname(save_path), "reconstruction_spectrum")
+    os.makedirs(spectrum_dir, exist_ok=True)
+    
+    with torch.no_grad():
+        # Ensure sample is on the correct device
+        sample = sample_tensor.to(device)
+        
+        # Get reconstruction
+        recon, _, snr = model(sample)
+        
+        # Convert SNR to a scalar if it's a tensor
+        if torch.is_tensor(snr):
+            snr = snr.item()
+        
+        # Move tensors to CPU for visualization
+        sample_np = sample.cpu().numpy()  # Shape: [batch_size, H, W, C]
+        recon_np = recon.cpu().numpy()    # Shape: [batch_size, H, W, C]
+        
+        # Initialize metrics storage
+        all_mse = []
+        all_psnr = []
+        all_sam = []
+        
+        # Process each sample
+        for sample_idx in range(sample_np.shape[0]):
+            # Calculate metrics for this sample
+            mse = ((sample_np[sample_idx] - recon_np[sample_idx]) ** 2).mean()
+            psnr = calculate_psnr(sample_np[sample_idx], recon_np[sample_idx])
+            sam = calculate_sam(sample_np[sample_idx], recon_np[sample_idx])
+            
+            # Store metrics
+            all_mse.append(mse)
+            all_psnr.append(psnr)
+            all_sam.append(sam)
+            
+            # Get image dimensions for this sample
+            h, w = sample_np[sample_idx].shape[0:2]
+            
+            # # Set pixel coordinates (5 pixels in different regions)
+            # pixel_coordinates = [
+            #     (h//4, w//4),        # Top-left quadrant
+            #     (h//4, 3*w//4),      # Top-right quadrant
+            #     (3*h//4, w//4),      # Bottom-left quadrant
+            #     (3*h//4, 3*w//4),    # Bottom-right quadrant
+            #     (h//2, w//2)         # Center
+            # ]
+
+            # Set pixel coordinates (9 pixels in different regions)
+            pixel_coordinates = [
+                (h//4, w//4),        # Top-left quadrant
+                (h//4, w//2),        # Top-middle
+                (h//4, 3*w//4),      # Top-right quadrant
+                (h//2, w//4),        # Left-middle
+                (h//2, w//2),        # Center
+                (h//2, 3*w//4),      # Right-middle
+                (3*h//4, w//4),      # Bottom-left quadrant
+                (3*h//4, w//2),      # Bottom-middle
+                (3*h//4, 3*w//4)     # Bottom-right quadrant
+            ]
+            
+            # Number of spectral bands
+            num_bands = sample_np[sample_idx].shape[-1]
+            band_indices = np.arange(num_bands)
+            
+            # Create a combined plot with all pixels
+            plt.figure(figsize=(12, 8))
+            plt.title(f'Sample {sample_idx+1} - All Pixels - SNR: {snr:.2f} dB, PSNR: {psnr:.2f} dB, SAM: {sam:.4f} rad')
+            
+            # Colors for different pixels
+            colors = ['blue', 'green', 'red', 'purple', 'orange']
+            
+            # Plot each pixel's spectrum
+            for i, (y, x) in enumerate(pixel_coordinates):
+                color = colors[i % len(colors)]
+                
+                # Extract spectra
+                original_spectrum = sample_np[sample_idx, y, x, :]
+                recon_spectrum = recon_np[sample_idx, y, x, :]
+                
+                # Plot original (solid) and reconstructed (dashed)
+                plt.plot(band_indices, original_spectrum, color=color, linestyle='-', 
+                         label=f'Original Pixel ({y},{x})')
+                plt.plot(band_indices, recon_spectrum, color=color, linestyle='--', 
+                         label=f'Recon Pixel ({y},{x})')
+            
+            plt.xlabel('Spectral Band')
+            plt.ylabel('Value')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Save combined plot
+            base_filename = os.path.basename(save_path).rsplit('.', 1)[0]
+            combined_path = os.path.join(spectrum_dir, f"{base_filename}_sample_{sample_idx+1}_combined.png")
+            plt.savefig(combined_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Create individual plots for each pixel (in a single figure with subplots)
+            num_pixels = len(pixel_coordinates)
+            fig, axs = plt.subplots(num_pixels, 1, figsize=(10, 3*num_pixels), sharex=True)
+            
+            if num_pixels == 1:
+                axs = [axs]  # Make iterable if only one subplot
+                
+            for i, (y, x) in enumerate(pixel_coordinates):
+                color = colors[i % len(colors)]
+                
+                # Extract spectra
+                original_spectrum = sample_np[sample_idx, y, x, :]
+                recon_spectrum = recon_np[sample_idx, y, x, :]
+                
+                # Calculate error
+                error = original_spectrum - recon_spectrum
+                
+                # Plot on corresponding subplot
+                axs[i].plot(band_indices, original_spectrum, color=color, linestyle='-', label='Original')
+                axs[i].plot(band_indices, recon_spectrum, color=color, linestyle='--', label='Reconstructed')
+                axs[i].set_title(f'Pixel ({y},{x})')
+                axs[i].set_ylabel('Value')
+                axs[i].grid(True, alpha=0.3)
+                axs[i].legend()
+                
+                # Add error as small subplot or secondary axis
+                ax2 = axs[i].twinx()
+                ax2.plot(band_indices, error, color='gray', alpha=0.7, linestyle=':')
+                ax2.set_ylabel('Error', color='gray')
+                ax2.tick_params(axis='y', labelcolor='gray')
+            
+            # Set common x-label
+            fig.text(0.5, 0.04, 'Spectral Band', ha='center')
+            
+            # Set overall title
+            fig.suptitle(f'Sample {sample_idx+1} - Individual Pixel Spectra - SNR: {snr:.2f} dB', fontsize=16)
+            
+            plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Adjust for suptitle
+            
+            # Save individual plots
+            individual_path = os.path.join(spectrum_dir, f"{base_filename}_sample_{sample_idx+1}_individual.png")
+            plt.savefig(individual_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Save plot data
+            plot_data = {
+                'metrics': {
+                    'mse': float(mse),
+                    'psnr': float(psnr),
+                    'sam': float(sam),
+                    'snr': float(snr)
+                },
+                'pixels': {}
+            }
+            
+            for i, (y, x) in enumerate(pixel_coordinates):
+                plot_data['pixels'][f"pixel_{y}_{x}"] = {
+                    'original': sample_np[sample_idx, y, x, :].tolist(),
+                    'reconstructed': recon_np[sample_idx, y, x, :].tolist(),
+                    'error': (sample_np[sample_idx, y, x, :] - recon_np[sample_idx, y, x, :]).tolist()
+                }
+            
+            data_path = os.path.join(spectrum_dir, f"{base_filename}_sample_{sample_idx+1}_spectrum_data.json")
+            with open(data_path, 'w') as f:
+                json.dump(plot_data, f)
+        
+        # For backward compatibility, return averaged metrics
+        avg_mse = sum(all_mse) / len(all_mse)
+        avg_psnr = sum(all_psnr) / len(all_psnr)
+        avg_sam = sum(all_sam) / len(all_sam)
+        
+        return avg_mse, avg_psnr, avg_sam
+
 ###############################################################################
 # MODIFIED AUTOENCODER MODEL WITH RANDOM NOISE
 ###############################################################################

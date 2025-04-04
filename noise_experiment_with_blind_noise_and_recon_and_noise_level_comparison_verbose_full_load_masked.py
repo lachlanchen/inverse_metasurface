@@ -29,6 +29,7 @@ from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base
     calculate_psnr,
     calculate_sam,
     visualize_reconstruction,
+    visualize_reconstruction_spectrum,
     HyperspectralAutoencoderRandomNoise,
     FixedShapeModel
 )
@@ -199,6 +200,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     initial_recon_path = os.path.join(recon_dir, "initial_reconstruction.png")
     initial_mse, initial_psnr, initial_sam = visualize_reconstruction(
         model, sample_tensor, device, initial_recon_path)
+    _, _, _ = visualize_reconstruction_spectrum(
+        model, sample_tensor, device, initial_recon_path)
     
     print(f"Initial metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad")
     
@@ -306,6 +309,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             current_mse, current_psnr, current_sam = visualize_reconstruction(
                 model, sample_tensor, device, recon_path)
+            _, _, _ = visualize_reconstruction_spectrum(
+                model, sample_tensor, device, recon_path)
             
             # Save metrics
             train_mse_values.append(current_mse)
@@ -387,6 +392,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     # Get final reconstruction and metrics
     final_recon_path = os.path.join(recon_dir, "final_reconstruction.png")
     final_mse, final_psnr, final_sam = visualize_reconstruction(
+        model, sample_tensor, device, final_recon_path)
+    _, _, _ = visualize_reconstruction_spectrum(
         model, sample_tensor, device, final_recon_path)
     
     print(f"Final metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad")
