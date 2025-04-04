@@ -9,7 +9,7 @@ import argparse
 import numpy.linalg as LA
 import shutil
 from datetime import datetime
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset, random_split, Dataset
 from tqdm import tqdm
 import math
 import random
@@ -26,10 +26,6 @@ from noise_experiment_with_blind_noise import (
 )
 
 from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base import (
-    calculate_mse_in_batch,
-    calculate_psnr_in_batch,
-    calculate_sam_in_batch,
-    calculate_metrics_in_batch,
     calculate_psnr,
     calculate_sam,
     visualize_reconstruction,
@@ -43,6 +39,200 @@ latent_dim = 11
 in_channels = 100
 
 
+###############################################################################
+# LAZY DATA LOADING CLASSES
+###############################################################################
+class LazyAVIRISDataset(Dataset):
+    """Dataset that lazily loads AVIRIS data from disk to avoid memory issues."""
+    
+    def __init__(self, data_path, indices=None, transform=None):
+        """
+        Initialize the lazy dataset loader.
+        
+        Args:
+            data_path: Path to the numpy array or PyTorch tensor file
+            indices: Optional indices to select only specific samples
+            transform: Optional transform to apply to the data
+        """
+        self.data_path = data_path
+        self.transform = transform
+        self.indices = indices
+        
+        # Get dataset info without loading all data
+        if data_path.endswith('.npy'):
+            # Memory map the file to get shape without loading into memory
+            with np.load(data_path, mmap_mode='r') as data:
+                self.shape = data.shape
+                self.length = data.shape[0] if indices is None else len(indices)
+        elif data_path.endswith('.pt'):
+            # For PyTorch tensor we need to load metadata
+            info = torch.load(data_path, map_location='cpu', weights_only=True)
+            if isinstance(info, dict) and 'shape' in info:
+                # If we saved shape info separately
+                self.shape = info['shape']
+            else:
+                # We need to load the tensor to get its shape
+                data = torch.load(data_path, map_location='cpu')
+                self.shape = data.shape
+                del data  # Free memory
+            self.length = self.shape[0] if indices is None else len(indices)
+        else:
+            raise ValueError(f"Unsupported file format: {data_path}")
+            
+        print(f"Initialized LazyAVIRISDataset with {self.length} samples of shape {self.shape[1:]}")
+    
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        if self.indices is not None:
+            idx = self.indices[idx]
+            
+        # Load only the specific sample
+        if self.data_path.endswith('.npy'):
+            # Load using numpy memory mapping
+            with np.load(self.data_path, mmap_mode='r') as data:
+                sample = data[idx].copy()  # Copy to make it writeable
+                sample = torch.from_numpy(sample)
+        elif self.data_path.endswith('.pt'):
+            # For PyTorch we need a custom approach
+            data = torch.load(self.data_path, map_location='cpu')
+            sample = data[idx]
+            del data  # Free memory
+            
+        # Apply transforms if any
+        if self.transform:
+            sample = self.transform(sample)
+            
+        return sample
+
+
+def create_lazy_data_split(data_path, train_ratio=0.7, batch_size=32, seed=42):
+    """
+    Create train and test data loaders from a large dataset file without loading all data at once.
+    
+    Args:
+        data_path: Path to the data file
+        train_ratio: Ratio of data to use for training
+        batch_size: Batch size for DataLoaders
+        seed: Random seed for reproducibility
+        
+    Returns:
+        tuple: (train_loader, test_loader, train_dataset, test_dataset)
+    """
+    # First, get the size of the dataset
+    if data_path.endswith('.npy'):
+        # Use memory mapping to check size without loading
+        with np.load(data_path, mmap_mode='r') as data:
+            num_samples = data.shape[0]
+    elif data_path.endswith('.pt'):
+        # Quick load to get shape
+        info = torch.load(data_path, map_location='cpu', weights_only=True)
+        if isinstance(info, dict) and 'shape' in info:
+            num_samples = info['shape'][0]
+        else:
+            data = torch.load(data_path, map_location='cpu')
+            num_samples = data.shape[0]
+            del data  # Free memory
+    else:
+        raise ValueError(f"Unsupported file format: {data_path}")
+    
+    # Create train/test split indices
+    torch.manual_seed(seed)
+    indices = torch.randperm(num_samples).tolist()
+    split_idx = int(train_ratio * num_samples)
+    train_indices = indices[:split_idx]
+    test_indices = indices[split_idx:]
+    
+    # Create datasets with specific indices
+    train_dataset = LazyAVIRISDataset(data_path, indices=train_indices)
+    test_dataset = LazyAVIRISDataset(data_path, indices=test_indices)
+    
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    
+    print(f"Created data split with {len(train_dataset)} training and {len(test_dataset)} testing samples")
+    
+    return train_loader, test_loader, train_dataset, test_dataset
+
+
+###############################################################################
+# BATCH METRICS CALCULATION
+###############################################################################
+def calculate_metrics_in_batches(model, data_loader, device, max_batches=None):
+    """
+    Calculate MSE, PSNR, and SAM metrics across batches to handle large datasets.
+    
+    Args:
+        model: Model to evaluate
+        data_loader: DataLoader for the dataset
+        device: Device to use for computation
+        max_batches: Maximum number of batches to process (None for all)
+        
+    Returns:
+        tuple: (avg_mse, avg_psnr, avg_sam, avg_snr)
+    """
+    model.eval()
+    total_mse = 0.0
+    total_psnr = 0.0
+    total_sam = 0.0
+    total_snr = 0.0
+    batch_count = 0
+    sample_count = 0
+    
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(data_loader, desc="Calculating metrics")):
+            if max_batches is not None and i >= max_batches:
+                break
+                
+            # Handle both simple tensors and tuple/list batch formats
+            if isinstance(batch, (list, tuple)):
+                x = batch[0].to(device)
+            else:
+                x = batch.to(device)
+            
+            # Forward pass
+            recon, _, snr = model(x)
+            
+            # Calculate MSE
+            batch_mse = ((recon - x) ** 2).mean().item()
+            
+            # Calculate PSNR
+            batch_psnr = calculate_psnr(x.cpu(), recon.cpu())
+            
+            # Calculate SAM
+            batch_sam = calculate_sam(x.cpu(), recon.cpu())
+            
+            # Convert SNR to scalar if it's a tensor
+            if torch.is_tensor(snr):
+                batch_snr = snr.item()
+            else:
+                batch_snr = snr
+            
+            # Accumulate weighted by batch size
+            batch_size = x.size(0)
+            total_mse += batch_mse * batch_size
+            total_psnr += batch_psnr * batch_size
+            total_sam += batch_sam * batch_size
+            total_snr += batch_snr * batch_size
+            
+            sample_count += batch_size
+            batch_count += 1
+            
+            # Print progress for large datasets
+            if batch_count % 10 == 0:
+                print(f"Processed {batch_count} batches, {sample_count} samples")
+                print(f"Current averages - MSE: {total_mse/sample_count:.6f}, PSNR: {total_psnr/sample_count:.2f} dB, SAM: {total_sam/sample_count:.6f} rad")
+    
+    # Calculate averages
+    avg_mse = total_mse / sample_count if sample_count > 0 else 0
+    avg_psnr = total_psnr / sample_count if sample_count > 0 else 0
+    avg_sam = total_sam / sample_count if sample_count > 0 else 0
+    avg_snr = total_snr / sample_count if sample_count > 0 else 0
+    
+    return avg_mse, avg_psnr, avg_sam, avg_snr
+
 
 ###############################################################################
 # TRAINING FUNCTION WITH RANDOM NOISE
@@ -51,7 +241,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
                            initial_filter_params=None, batch_size=10, num_epochs=500, 
                            encoder_lr=0.001, decoder_lr=0.001, filter_scale_factor=10.0,
                            cache_file=None, use_cache=False, folder_patterns="all",
-                           train_data=None, test_data=None, viz_interval_stage1=1):
+                           train_data=None, test_data=None, viz_interval_stage1=1,
+                           train_loader=None, test_loader=None, eval_batches=None):
     """
     Train and visualize the hyperspectral autoencoder with random noise levels between min_snr and max_snr
     using filter2shape2filter architecture with separate learning rates for encoder and decoder
@@ -71,9 +262,12 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     cache_file: Path to cache file for storing processed data
     use_cache: If True, try to load from cache file first
     folder_patterns: Comma-separated list of folder name patterns to include, or 'all' for all folders
-    train_data: Optional training data, if None will be loaded
-    test_data: Optional testing data, if None will be loaded
+    train_data: Optional training data tensor, if None will be loaded
+    test_data: Optional testing data tensor, if None will be loaded
     viz_interval_stage1: Interval for visualization and metrics printing in stage 1
+    train_loader: Optional DataLoader for training data
+    test_loader: Optional DataLoader for testing data
+    eval_batches: Maximum number of batches to use for evaluation (None for all)
     
     Returns:
     tuple: (initial_shape_path, least_mse_shape_path, lowest_cn_shape_path, final_shape_path, output_dir)
@@ -98,26 +292,34 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     print(f"Using device: {device}")
     
     # Load or use provided data
-    if train_data is None:
-        data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
-                                      cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
-        # print(data.shape)
-        data = data.to(device)
+    if train_loader is None:
+        if train_data is None:
+            # We need to load the data
+            data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
+                                          cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
+            print("Training data shape:", data.shape)
+            data = data.to(device)
+            
+            # Create dataset and dataloader
+            dataset = TensorDataset(data)
+            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        else:
+            # Use provided data tensor
+            train_data = train_data.to(device)
+            print("Training data shape:", train_data.shape)
+            
+            # Create dataset and dataloader
+            dataset = TensorDataset(train_data)
+            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     else:
-        data = train_data.to(device)
+        print(f"Using provided train_loader with batch size {batch_size}")
     
-    print("Training data shape:", data.shape)
-    
-    # Create dataset and dataloader
-    dataset = TensorDataset(data)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
-    # Create test dataloader if test data is provided
-    test_loader = None
-    if test_data is not None:
-        test_dataset = TensorDataset(test_data)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-        print("Test data shape:", test_data.shape)
+    # Create test dataloader if test data is provided and test_loader not provided
+    if test_loader is None:
+        if test_data is not None:
+            test_dataset = TensorDataset(test_data)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            print("Test data shape:", test_data.shape)
     
     # If no initial filter parameters were provided, generate them
     if initial_filter_params is None:
@@ -190,21 +392,24 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.savefig(initial_recon_filter_path)
     plt.close()
     
-    # Before training, get reconstruction of sample from train set
-    sample_idx = min(5, len(data) - 1)  # Make sure index is within range
-    # sample_tensor = data[sample_idx-1:sample_idx+2]  # Keep as tensor with batch dimension
-    # sample_tensor = data[::2]
-    sample_tensor = data
+    # Get a small sample for visualization (just a few samples)
+    sample_tensor = None
+    for batch in train_loader:
+        if isinstance(batch, (list, tuple)):
+            sample_tensor = batch[0][:3].to(device)  # Just take first 5 samples
+        else:
+            sample_tensor = batch[:3].to(device)  # Just take first 5 samples
+        break
     
     # If test data is provided, also get test sample
     test_sample_tensor = None
-    if test_data is not None:
-        test_sample_idx = min(5, len(test_data) - 1)
-        # test_sample_tensor = test_data[test_sample_idx:test_sample_idx+1].to(device)
-        # keep this on cpu to avoid oom
-        test_sample_tensor = test_data#[::10].to(device) 
-        print("test_sample_tensor.shape: ", test_sample_tensor.shape)
-
+    if test_loader is not None:
+        for batch in test_loader:
+            if isinstance(batch, (list, tuple)):
+                test_sample_tensor = batch[0][:3].to(device)  # Just take first 5 samples
+            else:
+                test_sample_tensor = batch[:3].to(device)  # Just take first 5 samples
+            break
     
     # Generate initial reconstruction for visualization
     initial_recon_path = os.path.join(recon_dir, "initial_reconstruction.png")
@@ -213,43 +418,28 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     _, _, _ = visualize_reconstruction_spectrum(
         model, sample_tensor, device, initial_recon_path)
     
-    print(f"Initial metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad")
+    # Calculate initial metrics on full dataset using batch processing
+    print("Calculating initial metrics on full dataset...")
+    initial_full_mse, initial_full_psnr, initial_full_sam, initial_full_snr = calculate_metrics_in_batches(
+        model, train_loader, device, max_batches=eval_batches)
     
-    # # If test data is available, calculate test metrics
-    # if test_sample_tensor is not None:
-    #     model.eval()
-    #     with torch.no_grad():
-    #         test_recon, _, test_snr = model(test_sample_tensor)
-    #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-    #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-    #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
-    #     print(f"Initial test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
-
+    print(f"Initial sample metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad")
+    print(f"Initial full dataset metrics - MSE: {initial_full_mse:.6f}, PSNR: {initial_full_psnr:.2f} dB, SAM: {initial_full_sam:.6f} rad")
+    
     # If test data is available, calculate test metrics
-    if test_sample_tensor is not None:
-        model.eval()
-        
-        # # Calculate metrics using batch functions that handle CPU/GPU efficiently
-        # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
-        # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
-        # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
-        # Calculate all metrics with a single function call (one model pass instead of three)
-        test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
-        
-        # Get SNR for reference (using just one sample to avoid memory issues)
-        with torch.no_grad():
-            _, _, test_snr = model(test_sample_tensor[:1].to(device))
-            if torch.is_tensor(test_snr):
-                test_snr = test_snr.item()
-        
-        print(f"Initial test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+    initial_test_full_mse, initial_test_full_psnr, initial_test_full_sam, initial_test_full_snr = 0, 0, 0, 0
+    if test_loader is not None:
+        print("Calculating initial test metrics...")
+        initial_test_full_mse, initial_test_full_psnr, initial_test_full_sam, initial_test_full_snr = calculate_metrics_in_batches(
+            model, test_loader, device, max_batches=eval_batches)
+        print(f"Initial test metrics - MSE: {initial_test_full_mse:.6f}, PSNR: {initial_test_full_psnr:.2f} dB, SAM: {initial_test_full_sam:.6f} rad")
     
     # Initialize tracking variables
     losses = []
     condition_numbers = [initial_condition_number]
-    train_mse_values = [initial_mse]
-    train_psnr_values = [initial_psnr]
-    train_sam_values = [initial_sam]
+    train_mse_values = [initial_full_mse]
+    train_psnr_values = [initial_full_psnr]
+    train_sam_values = [initial_full_sam]
     applied_snr_values = []
     
     # Initialize test metrics tracking if test data is available
@@ -257,10 +447,10 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     test_psnr_values = []
     test_sam_values = []
     
-    if test_sample_tensor is not None:
-        test_mse_values.append(test_mse)
-        test_psnr_values.append(test_psnr)
-        test_sam_values.append(test_sam)
+    if test_loader is not None:
+        test_mse_values.append(initial_test_full_mse)
+        test_psnr_values.append(initial_test_full_psnr)
+        test_sam_values.append(initial_test_full_sam)
     
     # Variables for tracking best metrics
     lowest_condition_number = float('inf')
@@ -268,7 +458,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     lowest_cn_filter = None
     lowest_cn_epoch = -1
     
-    lowest_train_mse = initial_mse
+    lowest_train_mse = initial_full_mse
     lowest_mse_shape = initial_shape.copy()
     lowest_mse_filter = initial_filter.copy()
     lowest_mse_epoch = -1
@@ -287,8 +477,12 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         epoch_snr_values = []
         
         model.train()
-        for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}"):
-            x = batch[0]
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+            # Handle both simple tensors and tuple/list batch formats
+            if isinstance(batch, (list, tuple)):
+                x = batch[0].to(device)
+            else:
+                x = batch.to(device)
             
             # Forward pass with random noise
             recon, _, batch_snr = model(x)
@@ -333,7 +527,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         
         # Evaluate model on sample for detailed metrics every viz_interval_stage1 epochs or last epoch
         if (epoch + 1) % viz_interval_stage1 == 0 or epoch == num_epochs - 1:
-            # Evaluate on training sample
+            # Evaluate on visualization sample
             model.eval()
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             current_mse, current_psnr, current_sam = visualize_reconstruction(
@@ -341,49 +535,37 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             _, _, _ = visualize_reconstruction_spectrum(
                 model, sample_tensor, device, recon_path)
             
+            # Calculate metrics on full dataset using batch processing
+            print(f"Calculating metrics on full dataset for epoch {epoch+1}...")
+            current_full_mse, current_full_psnr, current_full_sam, current_full_snr = calculate_metrics_in_batches(
+                model, train_loader, device, max_batches=eval_batches)
+            
             # Save metrics
-            train_mse_values.append(current_mse)
-            train_psnr_values.append(current_psnr)
-            train_sam_values.append(current_sam)
+            train_mse_values.append(current_full_mse)
+            train_psnr_values.append(current_full_psnr)
+            train_sam_values.append(current_full_sam)
             
             # Print detailed training metrics
             print(f"\nEpoch {epoch+1} detailed metrics:")
-            print(f"  Train - MSE: {current_mse:.6f}, PSNR: {current_psnr:.2f} dB, SAM: {current_sam:.6f} rad")
+            print(f"  Sample - MSE: {current_mse:.6f}, PSNR: {current_psnr:.2f} dB, SAM: {current_sam:.6f} rad")
+            print(f"  Full Train - MSE: {current_full_mse:.6f}, PSNR: {current_full_psnr:.2f} dB, SAM: {current_full_sam:.6f} rad")
             
-            # # If test data is available, calculate test metrics
-            # if test_sample_tensor is not None:
-            #     with torch.no_grad():
-            #         test_recon, _, test_snr = model(test_sample_tensor)
-            #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-            #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-            #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
             # If test data is available, calculate test metrics
-            if test_sample_tensor is not None:
-                model.eval()
-                # Calculate metrics using batch functions
-                # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
-                # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
-                # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
-                # Calculate all metrics with a single function call (one model pass instead of three)
-                test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
-                
-
-                # Get SNR for reference (using just one sample to avoid memory issues)
-                with torch.no_grad():
-                    _, _, test_snr = model(test_sample_tensor[:1].to(device))
-                    if torch.is_tensor(test_snr):
-                        test_snr = test_snr.item()
+            if test_loader is not None:
+                print("Calculating test metrics...")
+                test_full_mse, test_full_psnr, test_full_sam, test_full_snr = calculate_metrics_in_batches(
+                    model, test_loader, device, max_batches=eval_batches)
                 
                 # Save test metrics
-                test_mse_values.append(test_mse)
-                test_psnr_values.append(test_psnr)
-                test_sam_values.append(test_sam)
+                test_mse_values.append(test_full_mse)
+                test_psnr_values.append(test_full_psnr)
+                test_sam_values.append(test_full_sam)
                 
-                print(f"  Test  - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+                print(f"  Full Test - MSE: {test_full_mse:.6f}, PSNR: {test_full_psnr:.2f} dB, SAM: {test_full_sam:.6f} rad")
             
             # Check if this is the lowest MSE so far
-            if current_mse < lowest_train_mse:
-                lowest_train_mse = current_mse
+            if current_full_mse < lowest_train_mse:
+                lowest_train_mse = current_full_mse
                 lowest_mse_shape = current_shape.copy()
                 lowest_mse_filter = current_filter_raw.clone()
                 lowest_mse_epoch = epoch
@@ -441,34 +623,21 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     _, _, _ = visualize_reconstruction_spectrum(
         model, sample_tensor, device, final_recon_path)
     
-    print(f"Final metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad")
+    # Calculate final metrics on full dataset using batch processing
+    print("Calculating final metrics on full dataset...")
+    final_full_mse, final_full_psnr, final_full_sam, final_full_snr = calculate_metrics_in_batches(
+        model, train_loader, device, max_batches=eval_batches)
     
-    # # If test data is available, calculate final test metrics
-    # if test_sample_tensor is not None:
-    #     model.eval()
-    #     with torch.no_grad():
-    #         test_recon, _, test_snr = model(test_sample_tensor)
-    #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-    #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-    #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
-    #     print(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+    print(f"Final sample metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad")
+    print(f"Final full dataset metrics - MSE: {final_full_mse:.6f}, PSNR: {final_full_psnr:.2f} dB, SAM: {final_full_sam:.6f} rad")
+    
     # If test data is available, calculate final test metrics
-    if test_sample_tensor is not None:
-        model.eval()
-        # Calculate metrics using batch functions
-        # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
-        # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
-        # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
-        # Calculate all metrics with a single function call (one model pass instead of three)
-        test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
-        
-        # Get SNR for reference (using just one sample to avoid memory issues)
-        with torch.no_grad():
-            _, _, test_snr = model(test_sample_tensor[:1].to(device))
-            if torch.is_tensor(test_snr):
-                test_snr = test_snr.item()
-        
-        print(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+    final_test_full_mse, final_test_full_psnr, final_test_full_sam, final_test_full_snr = 0, 0, 0, 0
+    if test_loader is not None:
+        print("Calculating final test metrics...")
+        final_test_full_mse, final_test_full_psnr, final_test_full_sam, final_test_full_snr = calculate_metrics_in_batches(
+            model, test_loader, device, max_batches=eval_batches)
+        print(f"Final test metrics - MSE: {final_test_full_mse:.6f}, PSNR: {final_test_full_psnr:.2f} dB, SAM: {final_test_full_sam:.6f} rad")
     
     # Save final shape
     final_shape_path = f"{output_dir}/final_shape.png"
@@ -611,7 +780,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     plt.figure(figsize=(10, 5))
     plt.plot(epochs_with_metrics, train_mse_values, 'b-o', label='Train MSE')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         plt.plot(epochs_with_metrics, test_mse_values, 'r-o', label='Test MSE')
     plt.grid(True)
     plt.xlabel("Epoch")
@@ -624,7 +793,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     # 5. PSNR values
     plt.figure(figsize=(10, 5))
     plt.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='Train PSNR')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         plt.plot(epochs_with_metrics, test_psnr_values, 'm-o', label='Test PSNR')
     plt.grid(True)
     plt.xlabel("Epoch")
@@ -637,7 +806,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     # 6. SAM values
     plt.figure(figsize=(10, 5))
     plt.plot(epochs_with_metrics, train_sam_values, 'm-o', label='Train SAM')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         plt.plot(epochs_with_metrics, test_sam_values, 'c-o', label='Test SAM')
     plt.grid(True)
     plt.xlabel("Epoch")
@@ -652,7 +821,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # MSE subplot
     ax1.plot(epochs_with_metrics, train_mse_values, 'b-o', label='Train MSE')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         ax1.plot(epochs_with_metrics, test_mse_values, 'r-o', label='Test MSE')
     ax1.set_ylabel("MSE")
     ax1.set_title(f"Image Quality Metrics During Training (SNR: {min_snr}-{max_snr} dB)")
@@ -661,7 +830,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # PSNR subplot
     ax2.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='Train PSNR')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         ax2.plot(epochs_with_metrics, test_psnr_values, 'm-o', label='Test PSNR')
     ax2.set_ylabel("PSNR (dB)")
     ax2.grid(True)
@@ -669,7 +838,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # SAM subplot
     ax3.plot(epochs_with_metrics, train_sam_values, 'c-o', label='Train SAM')
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         ax3.plot(epochs_with_metrics, test_sam_values, 'y-o', label='Test SAM')
     ax3.set_xlabel("Epoch")
     ax3.set_ylabel("SAM (rad)")
@@ -696,7 +865,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     np.save(f"{output_dir}/train_sam_values.npy", np.array(train_sam_values))
     np.save(f"{output_dir}/applied_snr_values.npy", np.array(applied_snr_values))
     
-    if test_sample_tensor is not None:
+    if test_loader is not None:
         np.save(f"{output_dir}/test_mse_values.npy", np.array(test_mse_values))
         np.save(f"{output_dir}/test_psnr_values.npy", np.array(test_psnr_values))
         np.save(f"{output_dir}/test_sam_values.npy", np.array(test_sam_values))
@@ -713,7 +882,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         f.write(f"Used cache: {use_cache}\n")
         f.write(f"Folder patterns: {folder_patterns}\n")
         f.write(f"Visualization interval: {viz_interval_stage1} epochs\n")
-        f.write("\n")
+        f.write(f"Evaluation batches limit: {eval_batches}\n\n")
         
         # Save condition number information
         f.write(f"Initial condition number: {initial_condition_number:.4f}\n")
@@ -722,20 +891,32 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         f.write(f"Condition number change: {final_condition_number - initial_condition_number:.4f}\n\n")
         
         # Save metrics information
-        f.write(f"Initial metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad\n")
-        f.write(f"Final metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad\n")
-        f.write(f"Lowest MSE: {lowest_train_mse:.6f} at epoch {lowest_mse_epoch+1}\n")
-        f.write(f"MSE improvement: {initial_mse - final_mse:.6f} ({(1 - final_mse/initial_mse) * 100:.2f}%)\n")
-        f.write(f"PSNR improvement: {final_psnr - initial_psnr:.2f} dB\n")
-        f.write(f"SAM improvement: {initial_sam - final_sam:.6f} rad ({(1 - final_sam/initial_sam) * 100:.2f}%)\n")
+        f.write(f"Initial visualization sample metrics:\n")
+        f.write(f"  MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad\n\n")
         
-        if test_sample_tensor is not None:
-            f.write("\nTest metrics:\n")
-            f.write(f"Initial test metrics - MSE: {test_mse_values[0]:.6f}, PSNR: {test_psnr_values[0]:.2f} dB, SAM: {test_sam_values[0]:.6f} rad\n")
-            f.write(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad\n")
-            f.write(f"Test MSE improvement: {test_mse_values[0] - test_mse:.6f} ({(1 - test_mse/test_mse_values[0]) * 100:.2f}%)\n")
-            f.write(f"Test PSNR improvement: {test_psnr - test_psnr_values[0]:.2f} dB\n")
-            f.write(f"Test SAM improvement: {test_sam_values[0] - test_sam:.6f} rad ({(1 - test_sam/test_sam_values[0]) * 100:.2f}%)\n")
+        f.write(f"Initial full dataset metrics:\n")
+        f.write(f"  Train - MSE: {initial_full_mse:.6f}, PSNR: {initial_full_psnr:.2f} dB, SAM: {initial_full_sam:.6f} rad\n")
+        if test_loader is not None:
+            f.write(f"  Test  - MSE: {initial_test_full_mse:.6f}, PSNR: {initial_test_full_psnr:.2f} dB, SAM: {initial_test_full_sam:.6f} rad\n\n")
+        
+        f.write(f"Final visualization sample metrics:\n")
+        f.write(f"  MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad\n\n")
+        
+        f.write(f"Final full dataset metrics after {num_epochs} epochs:\n")
+        f.write(f"  Train - MSE: {final_full_mse:.6f}, PSNR: {final_full_psnr:.2f} dB, SAM: {final_full_sam:.6f} rad\n")
+        if test_loader is not None:
+            f.write(f"  Test  - MSE: {final_test_full_mse:.6f}, PSNR: {final_test_full_psnr:.2f} dB, SAM: {final_test_full_sam:.6f} rad\n\n")
+        
+        f.write(f"Lowest MSE: {lowest_train_mse:.6f} at epoch {lowest_mse_epoch+1}\n")
+        f.write(f"MSE improvement: {initial_full_mse - final_full_mse:.6f} ({(1 - final_full_mse/initial_full_mse) * 100:.2f}%)\n")
+        f.write(f"PSNR improvement: {final_full_psnr - initial_full_psnr:.2f} dB\n")
+        f.write(f"SAM improvement: {initial_full_sam - final_full_sam:.6f} rad ({(1 - final_full_sam/initial_full_sam) * 100:.2f}%)\n")
+        
+        if test_loader is not None:
+            f.write("\nTest metrics improvements:\n")
+            f.write(f"  Test MSE: {initial_test_full_mse - final_test_full_mse:.6f} ({(1 - final_test_full_mse/initial_test_full_mse) * 100:.2f}%)\n")
+            f.write(f"  Test PSNR: {final_test_full_psnr - initial_test_full_psnr:.2f} dB\n")
+            f.write(f"  Test SAM: {initial_test_full_sam - final_test_full_sam:.6f} rad ({(1 - final_test_full_sam/initial_test_full_sam) * 100:.2f}%)\n")
     
     print(f"Training with random noise SNR range {min_snr} to {max_snr} dB completed.")
     print(f"All results saved to {output_dir}/")
@@ -748,12 +929,13 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     return initial_shape_npy_path, lowest_mse_shape_npy_path, lowest_cn_shape_npy_path, final_shape_npy_path, output_dir
 
+
 ###############################################################################
-# FIXED SHAPE DECODER TRAINING WITH METRICS
+# FIXED SHAPE DECODER TRAINING WITH METRICS - BATCHED VERSION
 ###############################################################################
 def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, 
                           noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, 
-                          output_dir, viz_interval_stage2=1):
+                          output_dir, viz_interval_stage2=1, eval_batches=None):
     """
     Train model with fixed shape encoder and optimize only the decoder
     
@@ -770,6 +952,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     filter_scale_factor: Scaling factor for filter normalization
     output_dir: Directory to save outputs
     viz_interval_stage2: Interval for visualization in stage 2
+    eval_batches: Maximum number of batches to use for evaluation (None for all)
     
     Returns:
     tuple: Dictionary with metrics over epochs
@@ -809,31 +992,34 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         'test_sam': []
     }
     
-    # Get sample batch for visualization
-    train_sample = next(iter(train_loader))
-    if isinstance(train_sample, list) or isinstance(train_sample, tuple):
-        train_sample = train_sample[0]
-    train_sample = train_sample[:1].to(device)
+    # Get a sample batch for visualization (just a few samples)
+    train_sample = None
+    for batch in train_loader:
+        if isinstance(batch, (list, tuple)):
+            train_sample = batch[0][:1].to(device)  # Just take first sample
+        else:
+            train_sample = batch[:1].to(device)  # Just take first sample
+        break
     
-    test_sample = next(iter(test_loader))
-    if isinstance(test_sample, list) or isinstance(test_sample, tuple):
-        test_sample = test_sample[0]
-    test_sample = test_sample[:1].to(device)
+    test_sample = None
+    for batch in test_loader:
+        if isinstance(batch, (list, tuple)):
+            test_sample = batch[0][:1].to(device)  # Just take first sample
+        else:
+            test_sample = batch[:1].to(device)  # Just take first sample
+        break
     
-    # Initial visualization and metrics
+    # Calculate initial metrics on full datasets
+    print(f"Calculating initial metrics for {shape_name} at {noise_level} dB...")
     model.eval()
-    with torch.no_grad():
-        # Train sample
-        train_recon, _ = model(train_sample, add_noise=False)
-        train_mse = ((train_recon - train_sample) ** 2).mean().item()
-        train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-        train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
-        
-        # Test sample
-        test_recon, _ = model(test_sample, add_noise=False)
-        test_mse = ((test_recon - test_sample) ** 2).mean().item()
-        test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-        test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+    
+    # Calculate on train set
+    train_mse, train_psnr, train_sam, _ = calculate_metrics_in_batches(
+        model, train_loader, device, max_batches=eval_batches)
+    
+    # Calculate on test set
+    test_mse, test_psnr, test_sam, _ = calculate_metrics_in_batches(
+        model, test_loader, device, max_batches=eval_batches)
     
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
@@ -912,12 +1098,10 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         num_batches = 0
         
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}, {shape_name} @ {noise_level}dB"):
-            if isinstance(batch, list) or isinstance(batch, tuple):
-                x = batch[0]
+            if isinstance(batch, (list, tuple)):
+                x = batch[0].to(device)
             else:
-                x = batch
-            
-            x = x.to(device)
+                x = batch.to(device)
             
             # Forward pass
             recon, _ = model(x, add_noise=True)
@@ -936,156 +1120,167 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Calculate average training loss
         avg_train_loss = train_epoch_loss / num_batches
         
-        # Evaluation phase
-        model.eval()
-        with torch.no_grad():
-            # Evaluate on train sample (without noise for clean comparison)
-            train_recon, _ = model(train_sample, add_noise=False)
-            train_mse = ((train_recon - train_sample) ** 2).mean().item()
-            train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-            train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
-            
-            # Evaluate on test sample (without noise for clean comparison)
-            test_recon, _ = model(test_sample, add_noise=False)
-            test_mse = ((test_recon - test_sample) ** 2).mean().item()
-            test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-            test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
-            
-            # Test set evaluation
-            test_loss = 0.0
-            for batch in test_loader:
-                if isinstance(batch, list) or isinstance(batch, tuple):
-                    x = batch[0]
-                else:
-                    x = batch
-                
-                x = x.to(device)
-                recon, _ = model(x, add_noise=False)
-                loss = criterion(recon, x)
-                test_loss += loss.item()
-            
-            avg_test_loss = test_loss / len(test_loader)
-        
-        # Save metrics
-        metrics['train_loss'].append(avg_train_loss)
-        metrics['test_loss'].append(avg_test_loss)
-        metrics['train_psnr'].append(train_psnr)
-        metrics['test_psnr'].append(test_psnr)
-        metrics['train_sam'].append(train_sam)
-        metrics['test_sam'].append(test_sam)
-        
-        # Print detailed metrics at specified intervals
+        # Evaluation phase - only perform full evaluation at specified intervals
         if (epoch + 1) % viz_interval_stage2 == 0 or epoch == num_epochs - 1:
-            print(f"\nEpoch {epoch+1}/{num_epochs}, {shape_name} shape at {noise_level} dB:")
-            print(f"  Train - MSE: {avg_train_loss:.6f}, PSNR: {train_psnr:.2f} dB, SAM: {train_sam:.6f} rad")
-            print(f"  Test  - MSE: {avg_test_loss:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad")
-            print(f"  Filter condition number: {condition_number:.4f}")
-        
-        # Check if this is the best model so far
-        if avg_test_loss < best_test_loss:
-            best_test_loss = avg_test_loss
-            best_epoch = epoch
-            best_model_state = model.decoder.state_dict()
-            
-            # Save best reconstruction
-            best_recon_path = os.path.join(shape_dir, "best_reconstruction.png")
+            model.eval()
             with torch.no_grad():
-                model.eval()
-                train_out, _ = model(train_sample, add_noise=False)
+                # Calculate on train set
+                train_mse, train_psnr, train_sam, _ = calculate_metrics_in_batches(
+                    model, train_loader, device, max_batches=eval_batches)
                 
-                # Plot original, reconstruction, and difference
-                plt.figure(figsize=(15, 5))
+                # Calculate on test set
+                test_mse, test_psnr, test_sam, _ = calculate_metrics_in_batches(
+                    model, test_loader, device, max_batches=eval_batches)
                 
-                # Select middle band for visualization
-                band_idx = train_sample.shape[-1] // 2
+                # Save metrics (for the epochs without full evaluation, use the training loss)
+                metrics['train_loss'].append(train_mse)
+                metrics['test_loss'].append(test_mse)
+                metrics['train_psnr'].append(train_psnr)
+                metrics['test_psnr'].append(test_psnr)
+                metrics['train_sam'].append(train_sam)
+                metrics['test_sam'].append(test_sam)
                 
-                # Get data as numpy
-                orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                diff = orig - recon
-                
-                # Find global min/max for colorbar
-                vmin = min(orig.min(), recon.min())
-                vmax = max(orig.max(), recon.max())
-                
-                # Calculate symmetric limits for difference
-                diff_abs_max = max(abs(diff.min()), abs(diff.max()))
-                
-                # Plot original
-                plt.subplot(1, 3, 1)
-                im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title('Original')
-                plt.colorbar(im1, fraction=0.046, pad=0.04)
-                
-                # Plot reconstruction
-                plt.subplot(1, 3, 2)
-                im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title(f'Best Reconstructed (Epoch {epoch+1})')
-                plt.colorbar(im2, fraction=0.046, pad=0.04)
-                
-                # Plot difference
-                plt.subplot(1, 3, 3)
-                im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
-                plt.title('Difference')
-                plt.colorbar(im3, fraction=0.046, pad=0.04)
-                
-                plt.tight_layout()
-                plt.savefig(best_recon_path)
-                plt.close()
+                # Print detailed metrics
+                print(f"\nEpoch {epoch+1}/{num_epochs}, {shape_name} shape at {noise_level} dB:")
+                print(f"  Train - MSE: {train_mse:.6f}, PSNR: {train_psnr:.2f} dB, SAM: {train_sam:.6f} rad")
+                print(f"  Test  - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad")
+                print(f"  Filter condition number: {condition_number:.4f}")
             
-            print(f"  New best model at epoch {epoch+1} - Test MSE: {best_test_loss:.6f}")
+                # Check if this is the best model so far
+                if test_mse < best_test_loss:
+                    best_test_loss = test_mse
+                    best_epoch = epoch
+                    best_model_state = model.decoder.state_dict()
+                    
+                    # Save best reconstruction
+                    best_recon_path = os.path.join(shape_dir, "best_reconstruction.png")
+                    with torch.no_grad():
+                        model.eval()
+                        train_out, _ = model(train_sample, add_noise=False)
+                        
+                        # Plot original, reconstruction, and difference
+                        plt.figure(figsize=(15, 5))
+                        
+                        # Select middle band for visualization
+                        band_idx = train_sample.shape[-1] // 2
+                        
+                        # Get data as numpy
+                        orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                        recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                        diff = orig - recon
+                        
+                        # Find global min/max for colorbar
+                        vmin = min(orig.min(), recon.min())
+                        vmax = max(orig.max(), recon.max())
+                        
+                        # Calculate symmetric limits for difference
+                        diff_abs_max = max(abs(diff.min()), abs(diff.max()))
+                        
+                        # Plot original
+                        plt.subplot(1, 3, 1)
+                        im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
+                        plt.title('Original')
+                        plt.colorbar(im1, fraction=0.046, pad=0.04)
+                        
+                        # Plot reconstruction
+                        plt.subplot(1, 3, 2)
+                        im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
+                        plt.title(f'Best Reconstructed (Epoch {epoch+1})')
+                        plt.colorbar(im2, fraction=0.046, pad=0.04)
+                        
+                        # Plot difference
+                        plt.subplot(1, 3, 3)
+                        im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+                        plt.title('Difference')
+                        plt.colorbar(im3, fraction=0.046, pad=0.04)
+                        
+                        plt.tight_layout()
+                        plt.savefig(best_recon_path)
+                        plt.close()
+                    
+                    print(f"  New best model at epoch {epoch+1} - Test MSE: {best_test_loss:.6f}")
+                
+                # Save reconstruction at specified intervals
+                recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
+                with torch.no_grad():
+                    model.eval()
+                    train_out, _ = model(train_sample, add_noise=False)
+                    
+                    # Plot original, reconstruction, and difference
+                    plt.figure(figsize=(15, 5))
+                    
+                    # Select middle band for visualization
+                    band_idx = train_sample.shape[-1] // 2
+                    
+                    # Get data as numpy
+                    orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                    recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                    diff = orig - recon
+                    
+                    # Find global min/max for colorbar
+                    vmin = min(orig.min(), recon.min())
+                    vmax = max(orig.max(), recon.max())
+                    
+                    # Calculate symmetric limits for difference
+                    diff_abs_max = max(abs(diff.min()), abs(diff.max()))
+                    
+                    # Plot original
+                    plt.subplot(1, 3, 1)
+                    im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
+                    plt.title('Original')
+                    plt.colorbar(im1, fraction=0.046, pad=0.04)
+                    
+                    # Plot reconstruction
+                    plt.subplot(1, 3, 2)
+                    im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
+                    plt.title(f'Reconstructed (Epoch {epoch+1})')
+                    plt.colorbar(im2, fraction=0.046, pad=0.04)
+                    
+                    # Plot difference
+                    plt.subplot(1, 3, 3)
+                    im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+                    plt.title('Difference')
+                    plt.colorbar(im3, fraction=0.046, pad=0.04)
+                    
+                    plt.tight_layout()
+                    plt.savefig(recon_path)
+                    plt.close()
+        else:
+            # For epochs where we don't do full evaluation, still track the training loss
+            metrics['train_loss'].append(avg_train_loss)
+            # For other metrics, duplicate the last values
+            metrics['test_loss'].append(metrics['test_loss'][-1])
+            metrics['train_psnr'].append(metrics['train_psnr'][-1])
+            metrics['test_psnr'].append(metrics['test_psnr'][-1])
+            metrics['train_sam'].append(metrics['train_sam'][-1])
+            metrics['test_sam'].append(metrics['test_sam'][-1])
+            
+            # Print basic progress
+            print(f"Epoch {epoch+1}/{num_epochs}, {shape_name} @ {noise_level}dB, Train Loss: {avg_train_loss:.6f}")
+    
+    # Calculate final metrics
+    model.eval()
+    with torch.no_grad():
+        # Calculate on train set
+        final_train_mse, final_train_psnr, final_train_sam, _ = calculate_metrics_in_batches(
+            model, train_loader, device, max_batches=eval_batches)
         
-        # Save reconstruction at specified intervals
-        if (epoch + 1) % viz_interval_stage2 == 0 or epoch == num_epochs - 1:
-            recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
-            with torch.no_grad():
-                model.eval()
-                train_out, _ = model(train_sample, add_noise=False)
-                
-                # Plot original, reconstruction, and difference
-                plt.figure(figsize=(15, 5))
-                
-                # Select middle band for visualization
-                band_idx = train_sample.shape[-1] // 2
-                
-                # Get data as numpy
-                orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                diff = orig - recon
-                
-                # Find global min/max for colorbar
-                vmin = min(orig.min(), recon.min())
-                vmax = max(orig.max(), recon.max())
-                
-                # Calculate symmetric limits for difference
-                diff_abs_max = max(abs(diff.min()), abs(diff.max()))
-                
-                # Plot original
-                plt.subplot(1, 3, 1)
-                im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title('Original')
-                plt.colorbar(im1, fraction=0.046, pad=0.04)
-                
-                # Plot reconstruction
-                plt.subplot(1, 3, 2)
-                im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
-                plt.title(f'Reconstructed (Epoch {epoch+1})')
-                plt.colorbar(im2, fraction=0.046, pad=0.04)
-                
-                # Plot difference
-                plt.subplot(1, 3, 3)
-                im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
-                plt.title('Difference')
-                plt.colorbar(im3, fraction=0.046, pad=0.04)
-                
-                plt.tight_layout()
-                plt.savefig(recon_path)
-                plt.close()
+        # Calculate on test set
+        final_test_mse, final_test_psnr, final_test_sam, _ = calculate_metrics_in_batches(
+            model, test_loader, device, max_batches=eval_batches)
+    
+    # Update final metrics to ensure accuracy
+    metrics['train_loss'][-1] = final_train_mse
+    metrics['test_loss'][-1] = final_test_mse
+    metrics['train_psnr'][-1] = final_train_psnr
+    metrics['test_psnr'][-1] = final_test_psnr
+    metrics['train_sam'][-1] = final_train_sam
+    metrics['test_sam'][-1] = final_test_sam
     
     # Save final detailed metrics
     print(f"\nFinal {shape_name} metrics at {noise_level} dB after {num_epochs} epochs:")
-    print(f"  Train - MSE: {metrics['train_loss'][-1]:.6f}, PSNR: {metrics['train_psnr'][-1]:.2f} dB, SAM: {metrics['train_sam'][-1]:.6f} rad")
-    print(f"  Test  - MSE: {metrics['test_loss'][-1]:.6f}, PSNR: {metrics['test_psnr'][-1]:.2f} dB, SAM: {metrics['test_sam'][-1]:.6f} rad")
+    print(f"  Train - MSE: {final_train_mse:.6f}, PSNR: {final_train_psnr:.2f} dB, SAM: {final_train_sam:.6f} rad")
+    print(f"  Test  - MSE: {final_test_mse:.6f}, PSNR: {final_test_psnr:.2f} dB, SAM: {final_test_sam:.6f} rad")
     print(f"  Best model at epoch {best_epoch+1} - Test MSE: {best_test_loss:.6f}")
     print(f"  Filter condition number: {condition_number:.4f}")
     
@@ -1155,7 +1350,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         f.write(f"Number of epochs: {num_epochs}\n")
         f.write(f"Decoder learning rate: {decoder_lr}\n")
         f.write(f"Filter scale factor: {filter_scale_factor}\n")
-        f.write(f"Visualization interval: {viz_interval_stage2} epochs\n\n")
+        f.write(f"Visualization interval: {viz_interval_stage2} epochs\n")
+        f.write(f"Evaluation batches limit: {eval_batches}\n\n")
         
         f.write(f"Filter condition number: {condition_number:.4f}\n\n")
         
@@ -1180,15 +1376,14 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     
     return metrics
 
-# ###############################################################################
-# # TRAINING WITH FIXED SHAPES AT DIFFERENT NOISE LEVELS
-# ###############################################################################
 
-
+###############################################################################
+# TRAINING WITH FIXED SHAPES AT DIFFERENT NOISE LEVELS - BATCHED VERSION
+###############################################################################
 def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir, 
                                noise_levels, num_epochs, batch_size, decoder_lr, 
                                filter_scale_factor, train_loader, test_loader,
-                               viz_interval_stage2=1):
+                               viz_interval_stage2=1, eval_batches=None):
     """
     Train multiple fixed shapes at different noise levels
     
@@ -1204,6 +1399,7 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
     train_loader: DataLoader for training data
     test_loader: DataLoader for test data
     viz_interval_stage2: Interval for visualization in stage 2
+    eval_batches: Maximum number of batches to use for evaluation (None for all)
     
     Returns:
     dict: Dictionary with results for each shape and noise level
@@ -1275,7 +1471,8 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
                 decoder_lr=decoder_lr,
                 filter_scale_factor=filter_scale_factor,
                 output_dir=noise_results_dir,
-                viz_interval_stage2=viz_interval_stage2
+                viz_interval_stage2=viz_interval_stage2,
+                eval_batches=eval_batches
             )
             
             # Save final metrics
@@ -1538,6 +1735,7 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
     
     return results
 
+
 ###############################################################################
 # MAIN FUNCTION
 ###############################################################################
@@ -1589,6 +1787,14 @@ def main():
     # Output arguments
     parser.add_argument('--output-dir', type=str, default=None, 
                        help="Output directory (default: blind_noise_experiment_[timestamp])")
+    
+    # Lazy loading arguments
+    parser.add_argument('--lazy-load', action='store_true',
+                       help="Use lazy loading for data to minimize memory usage")
+    parser.add_argument('--data-file', type=str, default=None,
+                       help="Path to pre-processed data file for lazy loading")
+    parser.add_argument('--eval-batches', type=int, default=None,
+                       help="Maximum number of batches to use for evaluation (None for all)")
     
     args = parser.parse_args()
     
@@ -1659,41 +1865,86 @@ def main():
     # Save the initial filter for reference
     np.save(f"{base_output_dir}/unified_initial_filter.npy", initial_filter_params.detach().cpu().numpy())
     
-    # Load and split data
-    print("Loading and splitting data into train/test sets...")
-    data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
-                                  cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
+    # Load and split data - either lazy or regular loading
+    print("Setting up data loaders...")
+    train_loader = None
+    test_loader = None
+    train_data = None
+    test_data = None
     
-    # Verify data is in BHWC format
-    if data.shape[1] == 100:  # If in BCHWt
-        data = data.permute(0, 2, 3, 1)  # Convert to BHWC
-        print(f"Converted data to BHWC format: {data.shape}")
-    
-    # Split data into training and testing sets (80% train, 20% test)
-    num_samples = data.shape[0]
-    indices = torch.randperm(num_samples)
-    train_size = int(0.7 * num_samples)
-    
-    train_indices = indices[:train_size]
-    test_indices = indices[train_size:]
-    
-    train_data = data[train_indices]
-    test_data = data[test_indices]
-    
-    print(f"Data split into {train_data.shape[0]} training and {test_data.shape[0]} testing samples")
-    
-    # Create data loaders for stage 2
-    train_loader = DataLoader(
-        TensorDataset(train_data), 
-        batch_size=args.batch_size, 
-        shuffle=True
-    )
-    
-    test_loader = DataLoader(
-        TensorDataset(test_data), 
-        batch_size=args.batch_size, 
-        shuffle=False
-    )
+    if args.lazy_load:
+        # Use lazy loading
+        print("Using lazy loading for data to minimize memory usage")
+        
+        # Determine data file
+        data_file = args.data_file if args.data_file else cache_path
+        if not os.path.exists(data_file):
+            print(f"Data file {data_file} not found. Loading and saving data first...")
+            data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
+                                         cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
+            torch.save(data, cache_path)
+            print(f"Data saved to {cache_path}")
+            
+            # Create lazy loaders from this data now in memory
+            num_samples = data.shape[0]
+            indices = torch.randperm(num_samples).tolist()
+            train_size = int(0.7 * num_samples)
+            
+            train_indices = indices[:train_size]
+            test_indices = indices[train_size:]
+            
+            # Create train and test datasets
+            train_dataset = TensorDataset(data[train_indices])
+            test_dataset = TensorDataset(data[test_indices])
+            
+            # Create loaders
+            train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+            
+        else:
+            # Create lazy data loaders using the data file
+            train_loader, test_loader, _, _ = create_lazy_data_split(
+                data_file, 
+                train_ratio=0.7, 
+                batch_size=args.batch_size,
+                seed=42
+            )
+    else:
+        # Regular loading - load all data into memory
+        print("Loading all data into memory...")
+        data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
+                                      cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
+        
+        # Verify data is in BHWC format
+        if data.shape[1] == 100:  # If in BCHW
+            data = data.permute(0, 2, 3, 1)  # Convert to BHWC
+            print(f"Converted data to BHWC format: {data.shape}")
+        
+        # Split data into training and testing sets (70% train, 30% test)
+        num_samples = data.shape[0]
+        indices = torch.randperm(num_samples)
+        train_size = int(0.7 * num_samples)
+        
+        train_indices = indices[:train_size]
+        test_indices = indices[train_size:]
+        
+        train_data = data[train_indices]
+        test_data = data[test_indices]
+        
+        print(f"Data split into {train_data.shape[0]} training and {test_data.shape[0]} testing samples")
+        
+        # Create data loaders
+        train_loader = DataLoader(
+            TensorDataset(train_data), 
+            batch_size=args.batch_size, 
+            shuffle=True
+        )
+        
+        test_loader = DataLoader(
+            TensorDataset(test_data), 
+            batch_size=args.batch_size, 
+            shuffle=False
+        )
     
     # Get shapes either from stage 1 or from provided directory
     shapes_dict = {}
@@ -1743,7 +1994,10 @@ def main():
             folder_patterns=folder_patterns,
             train_data=train_data,
             test_data=test_data,
-            viz_interval_stage1=args.viz_interval_stage1
+            viz_interval_stage1=args.viz_interval_stage1,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            eval_batches=args.eval_batches
         )
         
         # Create dictionary of shape paths for Stage 2
@@ -1782,7 +2036,8 @@ def main():
         filter_scale_factor=args.filter_scale,
         train_loader=train_loader,
         test_loader=test_loader,
-        viz_interval_stage2=args.viz_interval_stage2
+        viz_interval_stage2=args.viz_interval_stage2,
+        eval_batches=args.eval_batches
     )
     
     print(f"\nAll experiments completed! Results saved to: {os.path.abspath(base_output_dir)}")

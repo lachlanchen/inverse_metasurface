@@ -25,7 +25,11 @@ from noise_experiment_with_blind_noise import (
     generate_initial_filter, DecoderCNN5Layer
 )
 
-from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base_masked import (
+from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base import (
+    calculate_mse_in_batch,
+    calculate_psnr_in_batch,
+    calculate_sam_in_batch,
+    calculate_metrics_in_batch,
     calculate_psnr,
     calculate_sam,
     visualize_reconstruction,
@@ -188,13 +192,19 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # Before training, get reconstruction of sample from train set
     sample_idx = min(5, len(data) - 1)  # Make sure index is within range
-    sample_tensor = data[sample_idx-1:sample_idx+2]  # Keep as tensor with batch dimension
+    # sample_tensor = data[sample_idx-1:sample_idx+2]  # Keep as tensor with batch dimension
+    # sample_tensor = data[::2]
+    sample_tensor = data
     
     # If test data is provided, also get test sample
     test_sample_tensor = None
     if test_data is not None:
         test_sample_idx = min(5, len(test_data) - 1)
-        test_sample_tensor = test_data[test_sample_idx:test_sample_idx+1].to(device)
+        # test_sample_tensor = test_data[test_sample_idx:test_sample_idx+1].to(device)
+        # keep this on cpu to avoid oom
+        test_sample_tensor = test_data#[::10].to(device) 
+        print("test_sample_tensor.shape: ", test_sample_tensor.shape)
+
     
     # Generate initial reconstruction for visualization
     initial_recon_path = os.path.join(recon_dir, "initial_reconstruction.png")
@@ -205,14 +215,33 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     print(f"Initial metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad")
     
+    # # If test data is available, calculate test metrics
+    # if test_sample_tensor is not None:
+    #     model.eval()
+    #     with torch.no_grad():
+    #         test_recon, _, test_snr = model(test_sample_tensor)
+    #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+    #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+    #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+    #     print(f"Initial test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+
     # If test data is available, calculate test metrics
     if test_sample_tensor is not None:
         model.eval()
+        
+        # # Calculate metrics using batch functions that handle CPU/GPU efficiently
+        # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
+        # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
+        # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
+        # Calculate all metrics with a single function call (one model pass instead of three)
+        test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
+        
+        # Get SNR for reference (using just one sample to avoid memory issues)
         with torch.no_grad():
-            test_recon, _, test_snr = model(test_sample_tensor)
-            test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-            test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-            test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+            _, _, test_snr = model(test_sample_tensor[:1].to(device))
+            if torch.is_tensor(test_snr):
+                test_snr = test_snr.item()
+        
         print(f"Initial test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
     
     # Initialize tracking variables
@@ -321,13 +350,29 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             print(f"\nEpoch {epoch+1} detailed metrics:")
             print(f"  Train - MSE: {current_mse:.6f}, PSNR: {current_psnr:.2f} dB, SAM: {current_sam:.6f} rad")
             
+            # # If test data is available, calculate test metrics
+            # if test_sample_tensor is not None:
+            #     with torch.no_grad():
+            #         test_recon, _, test_snr = model(test_sample_tensor)
+            #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+            #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+            #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
             # If test data is available, calculate test metrics
             if test_sample_tensor is not None:
+                model.eval()
+                # Calculate metrics using batch functions
+                # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
+                # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
+                # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
+                # Calculate all metrics with a single function call (one model pass instead of three)
+                test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
+                
+
+                # Get SNR for reference (using just one sample to avoid memory issues)
                 with torch.no_grad():
-                    test_recon, _, test_snr = model(test_sample_tensor)
-                    test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-                    test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-                    test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+                    _, _, test_snr = model(test_sample_tensor[:1].to(device))
+                    if torch.is_tensor(test_snr):
+                        test_snr = test_snr.item()
                 
                 # Save test metrics
                 test_mse_values.append(test_mse)
@@ -398,14 +443,31 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     print(f"Final metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad")
     
+    # # If test data is available, calculate final test metrics
+    # if test_sample_tensor is not None:
+    #     model.eval()
+    #     with torch.no_grad():
+    #         test_recon, _, test_snr = model(test_sample_tensor)
+    #         test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+    #         test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+    #         test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+    #     print(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
     # If test data is available, calculate final test metrics
     if test_sample_tensor is not None:
         model.eval()
+        # Calculate metrics using batch functions
+        # test_mse = calculate_mse_in_batch(test_sample_tensor, model, device=device)
+        # test_psnr = calculate_psnr_in_batch(test_sample_tensor, model, device=device)
+        # test_sam = calculate_sam_in_batch(test_sample_tensor, model, device=device)
+        # Calculate all metrics with a single function call (one model pass instead of three)
+        test_mse, test_psnr, test_sam = calculate_metrics_in_batch(test_sample_tensor, model, device=device)
+        
+        # Get SNR for reference (using just one sample to avoid memory issues)
         with torch.no_grad():
-            test_recon, _, test_snr = model(test_sample_tensor)
-            test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
-            test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
-            test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+            _, _, test_snr = model(test_sample_tensor[:1].to(device))
+            if torch.is_tensor(test_snr):
+                test_snr = test_snr.item()
+        
         print(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
     
     # Save final shape
