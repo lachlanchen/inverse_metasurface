@@ -31,7 +31,7 @@ latent_dim = 11
 in_channels = 100
 
 def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None, data_range=1.0, epsilon=1e-8, 
-                              desc="Calculating metrics"):
+                              desc="Calculating metrics", is_fixed_shape=False):
     """
     Calculate MSE, PSNR, and SAM metrics in batches with a single model forward pass.
     
@@ -69,7 +69,11 @@ def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None,
     if data_on_device or original_data.shape[0] <= batch_size:
         with torch.no_grad():
             # Single forward pass
-            reconstructed, _, snr = model(original_data)
+            if is_fixed_shape:
+                reconstructed, _ = model(original_data)
+                snr = 0
+            else:
+                reconstructed, _, snr = model(original_data)
             
             # Convert SNR to scalar if it's a tensor
             if torch.is_tensor(snr):
@@ -143,7 +147,13 @@ def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None,
             x = original_data[i:end_idx].to(device)
             
             # Single forward pass for this batch
-            reconstructed, _, _ = model(x)
+            # reconstructed, _, _ = model(x)
+             # Single forward pass
+            if is_fixed_shape:
+                reconstructed, _ = model(x)
+                snr = 0
+            else:
+                reconstructed, _, snr = model(x)
             
             # MSE calculation for the batch
             batch_squared_diff_sum = ((reconstructed - x) ** 2).sum().item()
