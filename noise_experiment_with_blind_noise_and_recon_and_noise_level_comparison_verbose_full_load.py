@@ -545,6 +545,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.figure(figsize=(12, 8))
     for i in range(11):
         plt.plot(lowest_mse_filter.numpy()[i], label=f'Filter {i}' if i % 3 == 0 else None)
+        # plt.plot(lowest_mse_filter[i], label=f'Filter {i}' if i % 3 == 0 else None)
     plt.grid(True)
     plt.xlabel("Wavelength Index")
     plt.ylabel("Filter Value")
@@ -751,7 +752,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
 ###############################################################################
 # FIXED SHAPE DECODER TRAINING WITH METRICS
 ###############################################################################
-def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, 
+def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, train_data, test_data,
                           noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, 
                           output_dir, viz_interval_stage2=1):
     """
@@ -809,16 +810,16 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         'test_sam': []
     }
     
-    # # Get sample batch for visualization
-    # train_sample = next(iter(train_loader))
-    # if isinstance(train_sample, list) or isinstance(train_sample, tuple):
-    #     train_sample = train_sample[0]
-    # train_sample = train_sample[:1].to(device)
+    # Get sample batch for visualization
+    train_sample = next(iter(train_loader))
+    if isinstance(train_sample, list) or isinstance(train_sample, tuple):
+        train_sample = train_sample[0]
+    train_sample = train_sample[:1].to(device)
     
-    # test_sample = next(iter(test_loader))
-    # if isinstance(test_sample, list) or isinstance(test_sample, tuple):
-    #     test_sample = test_sample[0]
-    # test_sample = test_sample[:1].to(device)
+    test_sample = next(iter(test_loader))
+    if isinstance(test_sample, list) or isinstance(test_sample, tuple):
+        test_sample = test_sample[0]
+    test_sample = test_sample[:1].to(device)
     
     # # Initial visualization and metrics
     # model.eval()
@@ -835,22 +836,24 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     #     test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
     #     test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
 
-    # Get representative samples for visualization
-    train_sample = train_viz_sample = next(iter(train_loader))
-    if isinstance(train_viz_sample, list) or isinstance(train_viz_sample, tuple):
-        train_viz_sample = train_viz_sample[0]
-    train_viz_sample = train_viz_sample[:1].to(device)
+    # # Get representative samples for visualization
+    # train_sample = train_viz_sample = next(iter(train_loader))
+    # if isinstance(train_viz_sample, list) or isinstance(train_viz_sample, tuple):
+    #     train_viz_sample = train_viz_sample[0]
+    # train_viz_sample = train_viz_sample[:1].to(device)
 
-    test_sample = test_viz_sample = next(iter(test_loader))
-    if isinstance(test_viz_sample, list) or isinstance(test_viz_sample, tuple):
-        test_viz_sample = test_viz_sample[0]
-    test_viz_sample = test_viz_sample[:1].to(device)
+    # test_sample = test_viz_sample = next(iter(test_loader))
+    # if isinstance(test_viz_sample, list) or isinstance(test_viz_sample, tuple):
+    #     test_viz_sample = test_viz_sample[0]
+    # test_viz_sample = test_viz_sample[:1].to(device)
 
-    # Prepare full datasets for metrics calculation
-    full_train_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
-                              for batch in train_loader], dim=0)
-    full_test_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
-                             for batch in test_loader], dim=0)
+    # # Prepare full datasets for metrics calculation
+    # full_train_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
+    #                           for batch in train_loader], dim=0)
+    # full_test_data = torch.cat([batch[0] if isinstance(batch, (list, tuple)) else batch 
+    #                          for batch in test_loader], dim=0)
+    full_train_data = train_data
+    full_test_data = test_data
 
     # Initial metrics calculation on full datasets
     model.eval()
@@ -867,8 +870,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     # Generate visualizations with a single sample
     with torch.no_grad():
         # Get reconstruction for visualization
-        train_recon, _ = model(train_viz_sample, add_noise=False)
-        test_recon, _ = model(test_viz_sample, add_noise=False)
+        train_recon, _ = model(train_sample, add_noise=False)
+        test_recon, _ = model(test_sample, add_noise=False)
 
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
@@ -1000,8 +1003,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Generate visualizations with a single sample
         with torch.no_grad():
             # Get reconstruction for visualization
-            train_recon, _ = model(train_viz_sample, add_noise=False)
-            test_recon, _ = model(test_viz_sample, add_noise=False)
+            train_recon, _ = model(train_sample, add_noise=False)
+            test_recon, _ = model(test_sample, add_noise=False)
             
             # Test set evaluation
             test_loss = 0.0
@@ -1239,7 +1242,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
 
 def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir, 
                                noise_levels, num_epochs, batch_size, decoder_lr, 
-                               filter_scale_factor, train_loader, test_loader,
+                               filter_scale_factor, train_loader, test_loader, train_data, test_data,
                                viz_interval_stage2=1):
     """
     Train multiple fixed shapes at different noise levels
@@ -1321,6 +1324,8 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
                 shape2filter_path=shape2filter_path,
                 train_loader=train_loader,
                 test_loader=test_loader,
+                train_data=train_data,
+                test_data=test_data,
                 noise_level=noise_level,
                 num_epochs=num_epochs,
                 batch_size=batch_size,
@@ -1834,6 +1839,8 @@ def main():
         filter_scale_factor=args.filter_scale,
         train_loader=train_loader,
         test_loader=test_loader,
+        train_data=train_data,
+        test_data=test_data,
         viz_interval_stage2=args.viz_interval_stage2
     )
     
