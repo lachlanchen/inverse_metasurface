@@ -479,7 +479,7 @@ class DecoderCNN5Layer(nn.Module):
         #     nn.Conv2d(64, 100, kernel_size=3, padding=1)
         # )
 
-        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
     
     def forward(self, x):
         return self.decoder(x)
@@ -544,7 +544,7 @@ class HyperspectralAutoencoder(nn.Module):
         #     nn.ReLU(),
         #     nn.Conv2d(64, 100, kernel_size=3, padding=1)
         # )
-        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
     
     def get_current_filter(self):
         """Return the current learnable filter parameters"""

@@ -46,7 +46,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
                            initial_filter_params=None, batch_size=10, num_epochs=500, 
                            encoder_lr=0.001, decoder_lr=0.001, filter_scale_factor=10.0,
                            cache_file=None, use_cache=False, folder_patterns="all",
-                           train_data=None, test_data=None):
+                           train_data=None, test_data=None, viz_interval_stage1=1):
     """
     Train and visualize the hyperspectral autoencoder with random noise levels between min_snr and max_snr
     using filter2shape2filter architecture with separate learning rates for encoder and decoder
@@ -68,6 +68,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     folder_patterns: Comma-separated list of folder name patterns to include, or 'all' for all folders
     train_data: Optional training data, if None will be loaded
     test_data: Optional testing data, if None will be loaded
+    viz_interval_stage1: Interval for visualization and metrics printing in stage 1
     
     Returns:
     tuple: (initial_shape_path, least_mse_shape_path, lowest_cn_shape_path, final_shape_path, output_dir)
@@ -82,8 +83,10 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     # Create subfolders
     viz_dir = os.path.join(output_dir, "intermediate_viz")
     recon_dir = os.path.join(output_dir, "reconstructions")
+    filter_params_dir = os.path.join(viz_dir, "filter_params")
     os.makedirs(viz_dir, exist_ok=True)
     os.makedirs(recon_dir, exist_ok=True)
+    os.makedirs(filter_params_dir, exist_ok=True)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -103,6 +106,13 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     dataset = TensorDataset(data)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
+    # Create test dataloader if test data is provided
+    test_loader = None
+    if test_data is not None:
+        test_dataset = TensorDataset(test_data)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        print("Test data shape:", test_data.shape)
+    
     # If no initial filter parameters were provided, generate them
     if initial_filter_params is None:
         initial_filter_params = generate_initial_filter(device)
@@ -119,6 +129,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     print(f"Filter scale factor: {filter_scale_factor}")
     print(f"Encoder learning rate: {encoder_lr}")
     print(f"Decoder learning rate: {decoder_lr}")
+    print(f"Visualization interval: {viz_interval_stage1} epochs")
     
     # Get initial filter, shape, and filters for visualization
     initial_filter = model.get_current_filter().detach().cpu().numpy()
@@ -144,6 +155,19 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.legend()
     initial_filter_path = f"{output_dir}/initial_filter.png"
     plt.savefig(initial_filter_path)
+    plt.close()
+    
+    # Save initial filter_params
+    plt.figure(figsize=(12, 8))
+    for i in range(11):
+        plt.plot(initial_filter_params.detach().cpu().numpy()[i], label=f'Filter Param {i}' if i % 3 == 0 else None)
+    plt.grid(True)
+    plt.xlabel("Wavelength Index")
+    plt.ylabel("Parameter Value")
+    plt.title(f"Initial Filter Parameters (SNR: {min_snr}-{max_snr} dB)")
+    plt.legend()
+    initial_params_path = f"{filter_params_dir}/filter_params_epoch_0.png"
+    plt.savefig(initial_params_path)
     plt.close()
     
     # Also save the reconstructed filter from the pipeline
@@ -177,6 +201,16 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     print(f"Initial metrics - MSE: {initial_mse:.6f}, PSNR: {initial_psnr:.2f} dB, SAM: {initial_sam:.6f} rad")
     
+    # If test data is available, calculate test metrics
+    if test_sample_tensor is not None:
+        model.eval()
+        with torch.no_grad():
+            test_recon, _, test_snr = model(test_sample_tensor)
+            test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+            test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+            test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+        print(f"Initial test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+    
     # Initialize tracking variables
     losses = []
     condition_numbers = [initial_condition_number]
@@ -184,6 +218,16 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     train_psnr_values = [initial_psnr]
     train_sam_values = [initial_sam]
     applied_snr_values = []
+    
+    # Initialize test metrics tracking if test data is available
+    test_mse_values = []
+    test_psnr_values = []
+    test_sam_values = []
+    
+    if test_sample_tensor is not None:
+        test_mse_values.append(test_mse)
+        test_psnr_values.append(test_psnr)
+        test_sam_values.append(test_sam)
     
     # Variables for tracking best metrics
     lowest_condition_number = float('inf')
@@ -254,9 +298,10 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             lowest_cn_epoch = epoch
             print(f"New lowest condition number: {lowest_condition_number:.4f} at epoch {epoch+1}")
         
-        # Evaluate model on sample
-        model.eval()
-        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:  # Every 10 epochs
+        # Evaluate model on sample for detailed metrics every viz_interval_stage1 epochs or last epoch
+        if (epoch + 1) % viz_interval_stage1 == 0 or epoch == num_epochs - 1:
+            # Evaluate on training sample
+            model.eval()
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             current_mse, current_psnr, current_sam = visualize_reconstruction(
                 model, sample_tensor, device, recon_path)
@@ -266,7 +311,24 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             train_psnr_values.append(current_psnr)
             train_sam_values.append(current_sam)
             
-            print(f"Epoch {epoch+1} metrics - MSE: {current_mse:.6f}, PSNR: {current_psnr:.2f} dB, SAM: {current_sam:.6f} rad")
+            # Print detailed training metrics
+            print(f"\nEpoch {epoch+1} detailed metrics:")
+            print(f"  Train - MSE: {current_mse:.6f}, PSNR: {current_psnr:.2f} dB, SAM: {current_sam:.6f} rad")
+            
+            # If test data is available, calculate test metrics
+            if test_sample_tensor is not None:
+                with torch.no_grad():
+                    test_recon, _, test_snr = model(test_sample_tensor)
+                    test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+                    test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+                    test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+                
+                # Save test metrics
+                test_mse_values.append(test_mse)
+                test_psnr_values.append(test_psnr)
+                test_sam_values.append(test_sam)
+                
+                print(f"  Test  - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
             
             # Check if this is the lowest MSE so far
             if current_mse < lowest_train_mse:
@@ -276,8 +338,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
                 lowest_mse_epoch = epoch
                 print(f"New lowest MSE: {lowest_train_mse:.6f} at epoch {epoch+1}")
         
-        # Save intermediate shapes and visualizations
-        if (epoch+1) % (num_epochs // 1) == 0 or epoch == 0:
+        # Save intermediate shapes, filters, and filter_params visualizations
+        if (epoch+1) % viz_interval_stage1 == 0 or epoch == 0:
             # Save shape visualization to intermediate directory
             plot_shape_with_c4(
                 current_shape, 
@@ -296,7 +358,21 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             plt.legend()
             plt.savefig(f"{viz_dir}/filter_epoch_{epoch+1}.png")
             plt.close()
+            
+            # Save filter_params visualization
+            current_params = model.filter_params.detach().cpu().numpy()
+            plt.figure(figsize=(10, 6))
+            for i in range(11):
+                plt.plot(current_params[i], label=f'Filter Param {i}' if i % 3 == 0 else None)
+            plt.grid(True)
+            plt.xlabel("Wavelength Index")
+            plt.ylabel("Parameter Value")
+            plt.title(f"Filter Parameters at Epoch {epoch+1}")
+            plt.legend()
+            plt.savefig(f"{filter_params_dir}/filter_params_epoch_{epoch+1}.png")
+            plt.close()
         
+        # Print epoch summary
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.6f}, Avg SNR: {avg_snr:.2f} dB, Condition Number: {current_condition_number:.4f}")
     
     # Get final filter and shape
@@ -314,6 +390,16 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     print(f"Final metrics - MSE: {final_mse:.6f}, PSNR: {final_psnr:.2f} dB, SAM: {final_sam:.6f} rad")
     
+    # If test data is available, calculate final test metrics
+    if test_sample_tensor is not None:
+        model.eval()
+        with torch.no_grad():
+            test_recon, _, test_snr = model(test_sample_tensor)
+            test_mse = ((test_recon - test_sample_tensor) ** 2).mean().item()
+            test_psnr = calculate_psnr(test_sample_tensor.cpu(), test_recon.cpu())
+            test_sam = calculate_sam(test_sample_tensor.cpu(), test_recon.cpu())
+        print(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad, SNR: {test_snr:.2f} dB")
+    
     # Save final shape
     final_shape_path = f"{output_dir}/final_shape.png"
     plot_shape_with_c4(final_shape, f"Final Shape", final_shape_path)
@@ -330,6 +416,20 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.legend()
     final_filter_path = f"{output_dir}/final_filter.png"
     plt.savefig(final_filter_path)
+    plt.close()
+    
+    # Save final filter_params
+    final_params = model.filter_params.detach().cpu().numpy()
+    plt.figure(figsize=(12, 8))
+    for i in range(11):
+        plt.plot(final_params[i], label=f'Filter Param {i}' if i % 3 == 0 else None)
+    plt.grid(True)
+    plt.xlabel("Wavelength Index")
+    plt.ylabel("Parameter Value")
+    plt.title(f"Final Filter Parameters (SNR: {min_snr}-{max_snr} dB)")
+    plt.legend()
+    final_params_path = f"{filter_params_dir}/filter_params_final.png"
+    plt.savefig(final_params_path)
     plt.close()
     
     # Save reconstructed filter
@@ -395,6 +495,10 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     np.save(f"{lowest_cn_dir}/filter.npy", lowest_cn_filter.numpy())
     np.save(f"{lowest_mse_dir}/filter.npy", lowest_mse_filter.numpy())
     
+    # Save filter_params as NumPy files
+    np.save(f"{output_dir}/initial_filter_params.npy", initial_filter_params.detach().cpu().numpy())
+    np.save(f"{output_dir}/final_filter_params.npy", final_params)
+    
     # Plot metrics during training
     # 1. Condition Number
     plt.figure(figsize=(10, 5))
@@ -431,12 +535,14 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.close()
     
     # 4. MSE values
-    plt.figure(figsize=(10, 5))
-    epochs_with_metrics = list(range(0, num_epochs+1, 10))
-    if epochs_with_metrics[-1] != num_epochs:
+    epochs_with_metrics = list(range(0, num_epochs+1, viz_interval_stage1))
+    if num_epochs not in epochs_with_metrics:
         epochs_with_metrics.append(num_epochs)
     
-    plt.plot(epochs_with_metrics, train_mse_values, 'b-o', label='MSE')
+    plt.figure(figsize=(10, 5))
+    plt.plot(epochs_with_metrics, train_mse_values, 'b-o', label='Train MSE')
+    if test_sample_tensor is not None:
+        plt.plot(epochs_with_metrics, test_mse_values, 'r-o', label='Test MSE')
     plt.grid(True)
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
@@ -447,7 +553,9 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # 5. PSNR values
     plt.figure(figsize=(10, 5))
-    plt.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='PSNR')
+    plt.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='Train PSNR')
+    if test_sample_tensor is not None:
+        plt.plot(epochs_with_metrics, test_psnr_values, 'm-o', label='Test PSNR')
     plt.grid(True)
     plt.xlabel("Epoch")
     plt.ylabel("PSNR (dB)")
@@ -458,7 +566,9 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     # 6. SAM values
     plt.figure(figsize=(10, 5))
-    plt.plot(epochs_with_metrics, train_sam_values, 'm-o', label='SAM')
+    plt.plot(epochs_with_metrics, train_sam_values, 'm-o', label='Train SAM')
+    if test_sample_tensor is not None:
+        plt.plot(epochs_with_metrics, test_sam_values, 'c-o', label='Test SAM')
     plt.grid(True)
     plt.xlabel("Epoch")
     plt.ylabel("SAM (rad)")
@@ -471,20 +581,26 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 15), sharex=True)
     
     # MSE subplot
-    ax1.plot(epochs_with_metrics, train_mse_values, 'b-o', label='MSE')
+    ax1.plot(epochs_with_metrics, train_mse_values, 'b-o', label='Train MSE')
+    if test_sample_tensor is not None:
+        ax1.plot(epochs_with_metrics, test_mse_values, 'r-o', label='Test MSE')
     ax1.set_ylabel("MSE")
     ax1.set_title(f"Image Quality Metrics During Training (SNR: {min_snr}-{max_snr} dB)")
     ax1.grid(True)
     ax1.legend()
     
     # PSNR subplot
-    ax2.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='PSNR')
+    ax2.plot(epochs_with_metrics, train_psnr_values, 'g-o', label='Train PSNR')
+    if test_sample_tensor is not None:
+        ax2.plot(epochs_with_metrics, test_psnr_values, 'm-o', label='Test PSNR')
     ax2.set_ylabel("PSNR (dB)")
     ax2.grid(True)
     ax2.legend()
     
     # SAM subplot
-    ax3.plot(epochs_with_metrics, train_sam_values, 'm-o', label='SAM')
+    ax3.plot(epochs_with_metrics, train_sam_values, 'c-o', label='Train SAM')
+    if test_sample_tensor is not None:
+        ax3.plot(epochs_with_metrics, test_sam_values, 'y-o', label='Test SAM')
     ax3.set_xlabel("Epoch")
     ax3.set_ylabel("SAM (rad)")
     ax3.grid(True)
@@ -510,6 +626,11 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     np.save(f"{output_dir}/train_sam_values.npy", np.array(train_sam_values))
     np.save(f"{output_dir}/applied_snr_values.npy", np.array(applied_snr_values))
     
+    if test_sample_tensor is not None:
+        np.save(f"{output_dir}/test_mse_values.npy", np.array(test_mse_values))
+        np.save(f"{output_dir}/test_psnr_values.npy", np.array(test_psnr_values))
+        np.save(f"{output_dir}/test_sam_values.npy", np.array(test_sam_values))
+    
     # Create log file to save training parameters
     with open(f"{output_dir}/training_params.txt", "w") as f:
         f.write(f"Noise level range (SNR): {min_snr} to {max_snr} dB\n")
@@ -521,6 +642,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         f.write(f"Cache file: {cache_file}\n")
         f.write(f"Used cache: {use_cache}\n")
         f.write(f"Folder patterns: {folder_patterns}\n")
+        f.write(f"Visualization interval: {viz_interval_stage1} epochs\n")
         f.write("\n")
         
         # Save condition number information
@@ -536,6 +658,14 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         f.write(f"MSE improvement: {initial_mse - final_mse:.6f} ({(1 - final_mse/initial_mse) * 100:.2f}%)\n")
         f.write(f"PSNR improvement: {final_psnr - initial_psnr:.2f} dB\n")
         f.write(f"SAM improvement: {initial_sam - final_sam:.6f} rad ({(1 - final_sam/initial_sam) * 100:.2f}%)\n")
+        
+        if test_sample_tensor is not None:
+            f.write("\nTest metrics:\n")
+            f.write(f"Initial test metrics - MSE: {test_mse_values[0]:.6f}, PSNR: {test_psnr_values[0]:.2f} dB, SAM: {test_sam_values[0]:.6f} rad\n")
+            f.write(f"Final test metrics - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad\n")
+            f.write(f"Test MSE improvement: {test_mse_values[0] - test_mse:.6f} ({(1 - test_mse/test_mse_values[0]) * 100:.2f}%)\n")
+            f.write(f"Test PSNR improvement: {test_psnr - test_psnr_values[0]:.2f} dB\n")
+            f.write(f"Test SAM improvement: {test_sam_values[0] - test_sam:.6f} rad ({(1 - test_sam/test_sam_values[0]) * 100:.2f}%)\n")
     
     print(f"Training with random noise SNR range {min_snr} to {max_snr} dB completed.")
     print(f"All results saved to {output_dir}/")
@@ -552,7 +682,8 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
 # FIXED SHAPE DECODER TRAINING WITH METRICS
 ###############################################################################
 def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, 
-                          noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, output_dir):
+                          noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, 
+                          output_dir, viz_interval_stage2=1):
     """
     Train model with fixed shape encoder and optimize only the decoder
     
@@ -568,12 +699,13 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     decoder_lr: Learning rate for decoder optimizer
     filter_scale_factor: Scaling factor for filter normalization
     output_dir: Directory to save outputs
+    viz_interval_stage2: Interval for visualization in stage 2
     
     Returns:
     tuple: Dictionary with metrics over epochs
     """
     # Create output directory
-    shape_dir = os.path.join(output_dir, f"noise_{noise_level}dB_{shape_name}")
+    shape_dir = os.path.join(output_dir, f"shape_{shape_name}")
     recon_dir = os.path.join(shape_dir, "reconstructions")
     os.makedirs(shape_dir, exist_ok=True)
     os.makedirs(recon_dir, exist_ok=True)
@@ -687,10 +819,15 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         plt.savefig(initial_recon_path)
         plt.close()
     
-    # Print initial metrics
-    print(f"Initial {shape_name} metrics at {noise_level} dB:")
+    # Print initial metrics with more detail
+    print(f"\nInitial {shape_name} metrics at {noise_level} dB:")
     print(f"  Train - MSE: {train_mse:.6f}, PSNR: {train_psnr:.2f} dB, SAM: {train_sam:.6f} rad")
     print(f"  Test  - MSE: {test_mse:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad")
+    
+    # Calculate and print condition number
+    with torch.no_grad():
+        condition_number = calculate_condition_number(model.fixed_filter.detach().cpu())
+        print(f"  Filter condition number: {condition_number:.4f}")
     
     # Best metrics tracking
     best_test_loss = test_mse
@@ -704,7 +841,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         train_epoch_loss = 0.0
         num_batches = 0
         
-        for batch in train_loader:
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}, {shape_name} @ {noise_level}dB"):
             if isinstance(batch, list) or isinstance(batch, tuple):
                 x = batch[0]
             else:
@@ -732,13 +869,13 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Evaluation phase
         model.eval()
         with torch.no_grad():
-            # Evaluate on train sample
+            # Evaluate on train sample (without noise for clean comparison)
             train_recon, _ = model(train_sample, add_noise=False)
             train_mse = ((train_recon - train_sample) ** 2).mean().item()
             train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
             train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
             
-            # Evaluate on test sample
+            # Evaluate on test sample (without noise for clean comparison)
             test_recon, _ = model(test_sample, add_noise=False)
             test_mse = ((test_recon - test_sample) ** 2).mean().item()
             test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
@@ -766,6 +903,13 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         metrics['test_psnr'].append(test_psnr)
         metrics['train_sam'].append(train_sam)
         metrics['test_sam'].append(test_sam)
+        
+        # Print detailed metrics at specified intervals
+        if (epoch + 1) % viz_interval_stage2 == 0 or epoch == num_epochs - 1:
+            print(f"\nEpoch {epoch+1}/{num_epochs}, {shape_name} shape at {noise_level} dB:")
+            print(f"  Train - MSE: {avg_train_loss:.6f}, PSNR: {train_psnr:.2f} dB, SAM: {train_sam:.6f} rad")
+            print(f"  Test  - MSE: {avg_test_loss:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad")
+            print(f"  Filter condition number: {condition_number:.4f}")
         
         # Check if this is the best model so far
         if avg_test_loss < best_test_loss:
@@ -818,59 +962,62 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 plt.tight_layout()
                 plt.savefig(best_recon_path)
                 plt.close()
-        
-        # Print progress
-        if (epoch + 1) % 5 == 0 or epoch == num_epochs - 1:
-            print(f"Epoch {epoch+1}/{num_epochs}, {shape_name} shape at {noise_level} dB:")
-            print(f"  Train - MSE: {avg_train_loss:.6f}, PSNR: {train_psnr:.2f} dB, SAM: {train_sam:.6f} rad")
-            print(f"  Test  - MSE: {avg_test_loss:.6f}, PSNR: {test_psnr:.2f} dB, SAM: {test_sam:.6f} rad")
             
-            # Save reconstruction
-            if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
-                recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
-                with torch.no_grad():
-                    model.eval()
-                    train_out, _ = model(train_sample, add_noise=False)
-                    
-                    # Plot original, reconstruction, and difference
-                    plt.figure(figsize=(15, 5))
-                    
-                    # Select middle band for visualization
-                    band_idx = train_sample.shape[-1] // 2
-                    
-                    # Get data as numpy
-                    orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                    recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
-                    diff = orig - recon
-                    
-                    # Find global min/max for colorbar
-                    vmin = min(orig.min(), recon.min())
-                    vmax = max(orig.max(), recon.max())
-                    
-                    # Calculate symmetric limits for difference
-                    diff_abs_max = max(abs(diff.min()), abs(diff.max()))
-                    
-                    # Plot original
-                    plt.subplot(1, 3, 1)
-                    im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
-                    plt.title('Original')
-                    plt.colorbar(im1, fraction=0.046, pad=0.04)
-                    
-                    # Plot reconstruction
-                    plt.subplot(1, 3, 2)
-                    im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
-                    plt.title(f'Reconstructed (Epoch {epoch+1})')
-                    plt.colorbar(im2, fraction=0.046, pad=0.04)
-                    
-                    # Plot difference
-                    plt.subplot(1, 3, 3)
-                    im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
-                    plt.title('Difference')
-                    plt.colorbar(im3, fraction=0.046, pad=0.04)
-                    
-                    plt.tight_layout()
-                    plt.savefig(recon_path)
-                    plt.close()
+            print(f"  New best model at epoch {epoch+1} - Test MSE: {best_test_loss:.6f}")
+        
+        # Save reconstruction at specified intervals
+        if (epoch + 1) % viz_interval_stage2 == 0 or epoch == num_epochs - 1:
+            recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
+            with torch.no_grad():
+                model.eval()
+                train_out, _ = model(train_sample, add_noise=False)
+                
+                # Plot original, reconstruction, and difference
+                plt.figure(figsize=(15, 5))
+                
+                # Select middle band for visualization
+                band_idx = train_sample.shape[-1] // 2
+                
+                # Get data as numpy
+                orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                diff = orig - recon
+                
+                # Find global min/max for colorbar
+                vmin = min(orig.min(), recon.min())
+                vmax = max(orig.max(), recon.max())
+                
+                # Calculate symmetric limits for difference
+                diff_abs_max = max(abs(diff.min()), abs(diff.max()))
+                
+                # Plot original
+                plt.subplot(1, 3, 1)
+                im1 = plt.imshow(orig, cmap='viridis', vmin=vmin, vmax=vmax)
+                plt.title('Original')
+                plt.colorbar(im1, fraction=0.046, pad=0.04)
+                
+                # Plot reconstruction
+                plt.subplot(1, 3, 2)
+                im2 = plt.imshow(recon, cmap='viridis', vmin=vmin, vmax=vmax)
+                plt.title(f'Reconstructed (Epoch {epoch+1})')
+                plt.colorbar(im2, fraction=0.046, pad=0.04)
+                
+                # Plot difference
+                plt.subplot(1, 3, 3)
+                im3 = plt.imshow(diff, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+                plt.title('Difference')
+                plt.colorbar(im3, fraction=0.046, pad=0.04)
+                
+                plt.tight_layout()
+                plt.savefig(recon_path)
+                plt.close()
+    
+    # Save final detailed metrics
+    print(f"\nFinal {shape_name} metrics at {noise_level} dB after {num_epochs} epochs:")
+    print(f"  Train - MSE: {metrics['train_loss'][-1]:.6f}, PSNR: {metrics['train_psnr'][-1]:.2f} dB, SAM: {metrics['train_sam'][-1]:.6f} rad")
+    print(f"  Test  - MSE: {metrics['test_loss'][-1]:.6f}, PSNR: {metrics['test_psnr'][-1]:.2f} dB, SAM: {metrics['test_sam'][-1]:.6f} rad")
+    print(f"  Best model at epoch {best_epoch+1} - Test MSE: {best_test_loss:.6f}")
+    print(f"  Filter condition number: {condition_number:.4f}")
     
     # Save model
     model_save_path = os.path.join(shape_dir, "decoder_model.pt")
@@ -931,6 +1078,36 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     np.save(os.path.join(shape_dir, 'train_sam.npy'), np.array(metrics['train_sam']))
     np.save(os.path.join(shape_dir, 'test_sam.npy'), np.array(metrics['test_sam']))
     
+    # Save training summary
+    with open(os.path.join(shape_dir, 'training_summary.txt'), 'w') as f:
+        f.write(f"Shape: {shape_name}\n")
+        f.write(f"Noise level: {noise_level} dB\n")
+        f.write(f"Number of epochs: {num_epochs}\n")
+        f.write(f"Decoder learning rate: {decoder_lr}\n")
+        f.write(f"Filter scale factor: {filter_scale_factor}\n")
+        f.write(f"Visualization interval: {viz_interval_stage2} epochs\n\n")
+        
+        f.write(f"Filter condition number: {condition_number:.4f}\n\n")
+        
+        f.write(f"Initial metrics:\n")
+        f.write(f"  Train - MSE: {metrics['train_loss'][0]:.6f}, PSNR: {metrics['train_psnr'][0]:.2f} dB, SAM: {metrics['train_sam'][0]:.6f} rad\n")
+        f.write(f"  Test  - MSE: {metrics['test_loss'][0]:.6f}, PSNR: {metrics['test_psnr'][0]:.2f} dB, SAM: {metrics['test_sam'][0]:.6f} rad\n\n")
+        
+        f.write(f"Final metrics after {num_epochs} epochs:\n")
+        f.write(f"  Train - MSE: {metrics['train_loss'][-1]:.6f}, PSNR: {metrics['train_psnr'][-1]:.2f} dB, SAM: {metrics['train_sam'][-1]:.6f} rad\n")
+        f.write(f"  Test  - MSE: {metrics['test_loss'][-1]:.6f}, PSNR: {metrics['test_psnr'][-1]:.2f} dB, SAM: {metrics['test_sam'][-1]:.6f} rad\n\n")
+        
+        f.write(f"Best model at epoch {best_epoch+1}:\n")
+        f.write(f"  Test MSE: {best_test_loss:.6f}\n\n")
+        
+        f.write(f"Improvements:\n")
+        f.write(f"  Train MSE: {metrics['train_loss'][0] - metrics['train_loss'][-1]:.6f} ({(1 - metrics['train_loss'][-1]/metrics['train_loss'][0]) * 100:.2f}%)\n")
+        f.write(f"  Test MSE: {metrics['test_loss'][0] - metrics['test_loss'][-1]:.6f} ({(1 - metrics['test_loss'][-1]/metrics['test_loss'][0]) * 100:.2f}%)\n")
+        f.write(f"  Train PSNR: {metrics['train_psnr'][-1] - metrics['train_psnr'][0]:.2f} dB\n")
+        f.write(f"  Test PSNR: {metrics['test_psnr'][-1] - metrics['test_psnr'][0]:.2f} dB\n")
+        f.write(f"  Train SAM: {metrics['train_sam'][0] - metrics['train_sam'][-1]:.6f} rad ({(1 - metrics['train_sam'][-1]/metrics['train_sam'][0]) * 100:.2f}%)\n")
+        f.write(f"  Test SAM: {metrics['test_sam'][0] - metrics['test_sam'][-1]:.6f} rad ({(1 - metrics['test_sam'][-1]/metrics['test_sam'][0]) * 100:.2f}%)\n")
+    
     return metrics
 
 ###############################################################################
@@ -938,7 +1115,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
 ###############################################################################
 def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir, 
                                noise_levels, num_epochs, batch_size, decoder_lr, 
-                               filter_scale_factor, train_loader, test_loader):
+                               filter_scale_factor, train_loader, test_loader,
+                               viz_interval_stage2=1):
     """
     Train multiple fixed shapes at different noise levels
     
@@ -953,6 +1131,7 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
     filter_scale_factor: Scale factor for filter normalization
     train_loader: DataLoader for training data
     test_loader: DataLoader for test data
+    viz_interval_stage2: Interval for visualization in stage 2
     
     Returns:
     dict: Dictionary with results for each shape and noise level
@@ -981,14 +1160,16 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
         else:
             print(f"Warning: {shape_name} shape not found at {shape_path}")
     
-    # Train each shape with each noise level
+    # Initialize device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # Train each shape with each noise level, organizing by noise level first
     for noise_level in noise_levels:
         print(f"\n{'='*50}")
         print(f"Training with noise level: {noise_level} dB")
         print(f"{'='*50}")
         
+        # Create directory for this noise level
         noise_results_dir = os.path.join(results_dir, f"noise_{noise_level}dB")
         os.makedirs(noise_results_dir, exist_ok=True)
         
@@ -1001,6 +1182,9 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
             'train_sam': {},
             'test_sam': {}
         }
+        
+        # List to track condition numbers for each shape
+        condition_numbers = {}
         
         # Train each shape
         for shape_name, shape in shapes.items():
@@ -1018,7 +1202,8 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
                 batch_size=batch_size,
                 decoder_lr=decoder_lr,
                 filter_scale_factor=filter_scale_factor,
-                output_dir=results_dir
+                output_dir=noise_results_dir,
+                viz_interval_stage2=viz_interval_stage2
             )
             
             # Save final metrics
@@ -1039,6 +1224,20 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
             
             # Also store all metrics for this shape and noise level
             results['all_metrics'][(shape_name, noise_level)] = metrics
+            
+            # Calculate condition number for this shape
+            with torch.no_grad():
+                # Create temporary model to get the filter
+                temp_model = FixedShapeModel(
+                    shape=shape,
+                    shape2filter_path=shape2filter_path,
+                    noise_level=noise_level,
+                    filter_scale_factor=filter_scale_factor,
+                    device=device
+                )
+                condition_number = calculate_condition_number(temp_model.fixed_filter.detach().cpu())
+                condition_numbers[shape_name] = condition_number
+                del temp_model  # Clean up memory
         
         # Create comparison plots for this noise level
         # 1. MSE comparison
@@ -1085,6 +1284,74 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
         plt.legend()
         plt.savefig(os.path.join(noise_results_dir, 'sam_comparison.png'))
         plt.close()
+        
+        # 4. Create condition number bar chart
+        plt.figure(figsize=(10, 6))
+        plt.bar(list(condition_numbers.keys()), list(condition_numbers.values()), color='skyblue')
+        plt.grid(True, axis='y')
+        plt.xlabel('Shape Type')
+        plt.ylabel('Condition Number')
+        plt.title(f'Filter Condition Number Comparison at {noise_level} dB')
+        for i, (shape_name, cn) in enumerate(condition_numbers.items()):
+            plt.text(i, cn + 5, f'{cn:.2f}', ha='center')
+        plt.savefig(os.path.join(noise_results_dir, 'condition_number_comparison.png'))
+        plt.close()
+        
+        # 5. Create final metrics comparison table
+        final_metrics = {
+            'Shape': [],
+            'Train MSE': [],
+            'Test MSE': [],
+            'Train PSNR': [],
+            'Test PSNR': [],
+            'Train SAM': [],
+            'Test SAM': [],
+            'Condition Number': []
+        }
+        
+        for shape_name in shapes:
+            final_metrics['Shape'].append(shape_name)
+            final_metrics['Train MSE'].append(noise_metrics['train_loss'][shape_name][-1])
+            final_metrics['Test MSE'].append(noise_metrics['test_loss'][shape_name][-1])
+            final_metrics['Train PSNR'].append(noise_metrics['train_psnr'][shape_name][-1])
+            final_metrics['Test PSNR'].append(noise_metrics['test_psnr'][shape_name][-1])
+            final_metrics['Train SAM'].append(noise_metrics['train_sam'][shape_name][-1])
+            final_metrics['Test SAM'].append(noise_metrics['test_sam'][shape_name][-1])
+            final_metrics['Condition Number'].append(condition_numbers[shape_name])
+        
+        # Create table and save as CSV
+        with open(os.path.join(noise_results_dir, 'final_metrics_comparison.csv'), 'w') as f:
+            # Write header
+            f.write(','.join(final_metrics.keys()) + '\n')
+            
+            # Write data
+            for i in range(len(final_metrics['Shape'])):
+                row = [
+                    final_metrics['Shape'][i],
+                    f"{final_metrics['Train MSE'][i]:.6f}",
+                    f"{final_metrics['Test MSE'][i]:.6f}",
+                    f"{final_metrics['Train PSNR'][i]:.2f}",
+                    f"{final_metrics['Test PSNR'][i]:.2f}",
+                    f"{final_metrics['Train SAM'][i]:.6f}",
+                    f"{final_metrics['Test SAM'][i]:.6f}",
+                    f"{final_metrics['Condition Number'][i]:.4f}"
+                ]
+                f.write(','.join(row) + '\n')
+        
+        # Print summary of results for this noise level
+        print(f"\nSummary for noise level {noise_level} dB:")
+        print(f"{'Shape':<10} | {'Train MSE':<10} | {'Test MSE':<10} | {'Train PSNR':<10} | {'Test PSNR':<10} | {'Train SAM':<10} | {'Test SAM':<10} | {'Condition #':<10}")
+        print('-' * 94)
+        
+        for i in range(len(final_metrics['Shape'])):
+            print(f"{final_metrics['Shape'][i]:<10} | "
+                  f"{final_metrics['Train MSE'][i]:<10.6f} | "
+                  f"{final_metrics['Test MSE'][i]:<10.6f} | "
+                  f"{final_metrics['Train PSNR'][i]:<10.2f} | "
+                  f"{final_metrics['Test PSNR'][i]:<10.2f} | "
+                  f"{final_metrics['Train SAM'][i]:<10.6f} | "
+                  f"{final_metrics['Test SAM'][i]:<10.6f} | "
+                  f"{final_metrics['Condition Number'][i]:<10.2f}")
     
     # Create overall comparison plots across noise levels
     # 1. Final MSE comparison
@@ -1227,6 +1494,12 @@ def main():
                        help="Learning rate for encoder (default: 0.001)")
     parser.add_argument('--decoder-lr', type=float, default=0.001, 
                        help="Learning rate for decoder (default: 0.001)")
+    
+    # Visualization intervals
+    parser.add_argument('--viz-interval-stage1', type=int, default=1,
+                       help="Interval for visualization in stage 1 (default: 1)")
+    parser.add_argument('--viz-interval-stage2', type=int, default=1,
+                       help="Interval for visualization in stage 2 (default: 1)")
     
     # Experiment control
     parser.add_argument('--skip-stage1', action='store_true', 
@@ -1390,7 +1663,8 @@ def main():
             use_cache=args.use_cache,
             folder_patterns=folder_patterns,
             train_data=train_data,
-            test_data=test_data
+            test_data=test_data,
+            viz_interval_stage1=args.viz_interval_stage1
         )
         
         # Create dictionary of shape paths for Stage 2
@@ -1420,7 +1694,8 @@ def main():
         decoder_lr=args.decoder_lr,
         filter_scale_factor=args.filter_scale,
         train_loader=train_loader,
-        test_loader=test_loader
+        test_loader=test_loader,
+        viz_interval_stage2=args.viz_interval_stage2
     )
     
     print(f"\nAll experiments completed! Results saved to: {os.path.abspath(base_output_dir)}")

@@ -265,7 +265,7 @@ class CompressionModel(nn.Module):
         
         # Select decoder based on type
         if decoder_type.lower() == 'awan':
-            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
+            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
         elif decoder_type.lower() == 'cnn':
             self.decoder = SimpleCNNDecoder(in_channels=latent_dim, out_channels=in_channels)
         else:
