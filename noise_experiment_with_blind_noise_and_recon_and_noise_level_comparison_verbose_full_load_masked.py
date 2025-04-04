@@ -25,7 +25,7 @@ from noise_experiment_with_blind_noise import (
     generate_initial_filter, DecoderCNN5Layer
 )
 
-from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base import (
+from noise_experiment_with_blind_noise_and_recon_and_noise_level_comparison_base_masked import (
     calculate_mse_in_batch,
     calculate_psnr_in_batch,
     calculate_sam_in_batch,
