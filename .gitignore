@@ -18,3 +18,5 @@ AVIRIS/*
 AVIRIS*/*
 hyperspectral_autoencoder*/
 noise_experiment*/
+
+*.not_finished
