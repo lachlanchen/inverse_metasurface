@@ -343,8 +343,8 @@ def visualize_reconstruction_spectrum(model, sample_tensor, device, save_path, b
     tuple: (mse, psnr, sam) values averaged across all samples
     """
     # Import common functions from the original script
-    from calculate_psnr import calculate_psnr
-    from calculate_sam import calculate_sam
+    # from calculate_psnr import calculate_psnr
+    # from calculate_sam import calculate_sam
     
     # Make sure the spectrum directory exists
     spectrum_dir = os.path.join(os.path.dirname(save_path), "reconstruction_spectrum")
