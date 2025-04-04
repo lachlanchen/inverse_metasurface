@@ -256,7 +256,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         
         # Evaluate model on sample
         model.eval()
-        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:  # Every 10 epochs
+        if (epoch + 1) % 1 == 0 or epoch == num_epochs - 1:  # Every 10 epochs
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             current_mse, current_psnr, current_sam = visualize_reconstruction(
                 model, sample_tensor, device, recon_path)

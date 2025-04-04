@@ -88,7 +88,7 @@ def is_valid_tile(tile, min_valid_percentage=0.05, max_valid_percentage=0.95,
     
     return True
 
-def load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
+def load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", sample_rate=4, tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
     """
     Load pre-processed AVIRIS forest data from the simplified selection directory
     with improved tile validation.

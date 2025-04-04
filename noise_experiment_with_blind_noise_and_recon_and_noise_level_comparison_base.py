@@ -122,17 +122,98 @@ def calculate_sam(original, reconstructed, epsilon=1e-8):
 ###############################################################################
 # VISUALIZATION FUNCTIONS
 ###############################################################################
+# def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=50):
+#     """
+#     Create visualization of original, reconstructed, and difference images with unified colorbar
+    
+#     Parameters:
+#     model: Model to use for reconstruction
+#     sample_tensor: Input tensor to reconstruct (single sample with batch dimension)
+#     device: Device to use for computation
+#     save_path: Path to save the visualization
+#     band_idx: Index of spectral band to visualize (default: 50, middle of 100 bands)
+#     """
+#     with torch.no_grad():
+#         # Ensure sample is on the correct device
+#         sample = sample_tensor.to(device)
+        
+#         # Get reconstruction
+#         recon, _, snr = model(sample)
+        
+#         # Move tensors to CPU for visualization
+#         sample_np = sample.cpu().numpy()[0]  # Remove batch dimension
+#         recon_np = recon.cpu().numpy()[0]    # Remove batch dimension
+        
+#         # Calculate difference
+#         diff_np = sample_np - recon_np
+        
+#         # Extract specific spectral band
+#         sample_band = sample_np[:, :, band_idx]
+#         recon_band = recon_np[:, :, band_idx]
+#         diff_band = diff_np[:, :, band_idx]
+        
+#         # Calculate global min and max for unified colormap
+#         vmin = min(sample_band.min(), recon_band.min())
+#         vmax = max(sample_band.max(), recon_band.max())
+        
+#         # Calculate symmetric limits for difference
+#         diff_abs_max = max(abs(diff_band.min()), abs(diff_band.max()))
+        
+#         # Create figure
+#         plt.figure(figsize=(15, 5))
+        
+#         # Plot original
+#         plt.subplot(1, 3, 1)
+#         im1 = plt.imshow(sample_band, cmap='viridis', vmin=vmin, vmax=vmax)
+#         plt.title(f'Original (Band {band_idx})')
+#         plt.colorbar(im1, fraction=0.046, pad=0.04)
+        
+#         # Plot reconstruction
+#         plt.subplot(1, 3, 2)
+#         im2 = plt.imshow(recon_band, cmap='viridis', vmin=vmin, vmax=vmax)
+#         plt.title(f'Reconstructed (Band {band_idx}, SNR: {snr:.2f} dB)')
+#         plt.colorbar(im2, fraction=0.046, pad=0.04)
+        
+#         # Plot difference
+#         plt.subplot(1, 3, 3)
+#         im3 = plt.imshow(diff_band, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+#         plt.title(f'Difference (Band {band_idx})')
+#         plt.colorbar(im3, fraction=0.046, pad=0.04)
+        
+#         # Adjust layout and save
+#         plt.tight_layout()
+#         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+#         plt.close()
+        
+#         # Calculate metrics
+#         mse = ((sample_np - recon_np) ** 2).mean()
+#         psnr = calculate_psnr(sample_np, recon_np)
+#         sam = calculate_sam(sample_np, recon_np)
+        
+#         return mse, psnr, sam
+
 def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=50):
     """
     Create visualization of original, reconstructed, and difference images with unified colorbar
+    for multiple samples and multiple spectral bands.
     
     Parameters:
     model: Model to use for reconstruction
-    sample_tensor: Input tensor to reconstruct (single sample with batch dimension)
+    sample_tensor: Input tensor to reconstruct (can handle multiple samples)
     device: Device to use for computation
     save_path: Path to save the visualization
     band_idx: Index of spectral band to visualize (default: 50, middle of 100 bands)
+                (Will be used as one of the bands in multi-band visualization)
+    
+    Returns:
+    tuple: (mse, psnr, sam) values averaged across all samples
     """
+    # Define bands to visualize (including the specified band_idx)
+    band_indices = [5, 25, 50, 75, 95]
+    if band_idx not in band_indices:
+        band_indices.append(band_idx)
+        band_indices.sort()
+    
     with torch.no_grad():
         # Ensure sample is on the correct device
         sample = sample_tensor.to(device)
@@ -140,57 +221,111 @@ def visualize_reconstruction(model, sample_tensor, device, save_path, band_idx=5
         # Get reconstruction
         recon, _, snr = model(sample)
         
+        # Convert SNR to a scalar if it's a tensor
+        if torch.is_tensor(snr):
+            snr = snr.item()
+        
         # Move tensors to CPU for visualization
-        sample_np = sample.cpu().numpy()[0]  # Remove batch dimension
-        recon_np = recon.cpu().numpy()[0]    # Remove batch dimension
+        sample_np = sample.cpu().numpy()  # Shape: [batch_size, H, W, C]
+        recon_np = recon.cpu().numpy()    # Shape: [batch_size, H, W, C]
         
         # Calculate difference
         diff_np = sample_np - recon_np
         
-        # Extract specific spectral band
-        sample_band = sample_np[:, :, band_idx]
-        recon_band = recon_np[:, :, band_idx]
-        diff_band = diff_np[:, :, band_idx]
+        # Initialize metrics storage
+        all_mse = []
+        all_psnr = []
+        all_sam = []
         
-        # Calculate global min and max for unified colormap
-        vmin = min(sample_band.min(), recon_band.min())
-        vmax = max(sample_band.max(), recon_band.max())
+        # Process each sample
+        for sample_idx in range(sample_np.shape[0]):
+            # Calculate metrics for this sample
+            mse = ((sample_np[sample_idx] - recon_np[sample_idx]) ** 2).mean()
+            psnr = calculate_psnr(sample_np[sample_idx], recon_np[sample_idx])
+            sam = calculate_sam(sample_np[sample_idx], recon_np[sample_idx])
+            
+            # Store metrics
+            all_mse.append(mse)
+            all_psnr.append(psnr)
+            all_sam.append(sam)
+            
+            # Create a figure for this sample with multiple bands
+            plt.figure(figsize=(15, 5 * len(band_indices)))
+            
+            # Process each band
+            for i, b_idx in enumerate(band_indices):
+                # Extract specific spectral band
+                sample_band = sample_np[sample_idx, :, :, b_idx]
+                recon_band = recon_np[sample_idx, :, :, b_idx]
+                diff_band = diff_np[sample_idx, :, :, b_idx]
+                
+                # Calculate global min and max for unified colormap
+                vmin = min(sample_band.min(), recon_band.min())
+                vmax = max(sample_band.max(), recon_band.max())
+                
+                # Calculate symmetric limits for difference
+                diff_abs_max = max(abs(diff_band.min()), abs(diff_band.max()))
+                
+                # Plot original
+                plt.subplot(len(band_indices), 3, 3*i + 1)
+                im1 = plt.imshow(sample_band, cmap='viridis', vmin=vmin, vmax=vmax)
+                plt.title(f'Original (Band {b_idx})')
+                plt.colorbar(im1, fraction=0.046, pad=0.04)
+                
+                # Plot reconstruction
+                plt.subplot(len(band_indices), 3, 3*i + 2)
+                im2 = plt.imshow(recon_band, cmap='viridis', vmin=vmin, vmax=vmax)
+                plt.title(f'Reconstructed (Band {b_idx})')
+                plt.colorbar(im2, fraction=0.046, pad=0.04)
+                
+                # Plot difference
+                plt.subplot(len(band_indices), 3, 3*i + 3)
+                im3 = plt.imshow(diff_band, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
+                plt.title(f'Difference (Band {b_idx})')
+                plt.colorbar(im3, fraction=0.046, pad=0.04)
+            
+            # Add SNR information as a suptitle
+            plt.suptitle(f'Sample {sample_idx+1} - SNR: {snr:.2f} dB, PSNR: {psnr:.2f} dB, SAM: {sam:.4f} rad', fontsize=16)
+            
+            # Adjust layout and save
+            plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space for suptitle
+            
+            # Create directory structure if needed
+            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+            
+            # Save figure and data
+            sample_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}.png"
+            plt.savefig(sample_save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Save plot data for future reference
+            plot_data = {
+                'bands': {},
+                'metrics': {
+                    'mse': float(mse),
+                    'psnr': float(psnr),
+                    'sam': float(sam),
+                    'snr': float(snr)
+                }
+            }
+            
+            for b_idx in band_indices:
+                plot_data['bands'][str(b_idx)] = {
+                    'original': sample_np[sample_idx, :, :, b_idx].tolist(),
+                    'reconstructed': recon_np[sample_idx, :, :, b_idx].tolist(),
+                    'difference': diff_np[sample_idx, :, :, b_idx].tolist()
+                }
+            
+            data_save_path = f"{save_path.rsplit('.', 1)[0]}_sample_{sample_idx+1}_data.json"
+            with open(data_save_path, 'w') as f:
+                json.dump(plot_data, f)
         
-        # Calculate symmetric limits for difference
-        diff_abs_max = max(abs(diff_band.min()), abs(diff_band.max()))
+        # For backward compatibility, return averaged metrics
+        avg_mse = sum(all_mse) / len(all_mse)
+        avg_psnr = sum(all_psnr) / len(all_psnr)
+        avg_sam = sum(all_sam) / len(all_sam)
         
-        # Create figure
-        plt.figure(figsize=(15, 5))
-        
-        # Plot original
-        plt.subplot(1, 3, 1)
-        im1 = plt.imshow(sample_band, cmap='viridis', vmin=vmin, vmax=vmax)
-        plt.title(f'Original (Band {band_idx})')
-        plt.colorbar(im1, fraction=0.046, pad=0.04)
-        
-        # Plot reconstruction
-        plt.subplot(1, 3, 2)
-        im2 = plt.imshow(recon_band, cmap='viridis', vmin=vmin, vmax=vmax)
-        plt.title(f'Reconstructed (Band {band_idx}, SNR: {snr:.2f} dB)')
-        plt.colorbar(im2, fraction=0.046, pad=0.04)
-        
-        # Plot difference
-        plt.subplot(1, 3, 3)
-        im3 = plt.imshow(diff_band, cmap='coolwarm', vmin=-diff_abs_max, vmax=diff_abs_max)
-        plt.title(f'Difference (Band {band_idx})')
-        plt.colorbar(im3, fraction=0.046, pad=0.04)
-        
-        # Adjust layout and save
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Calculate metrics
-        mse = ((sample_np - recon_np) ** 2).mean()
-        psnr = calculate_psnr(sample_np, recon_np)
-        sam = calculate_sam(sample_np, recon_np)
-        
-        return mse, psnr, sam
+        return avg_mse, avg_psnr, avg_sam
 
 ###############################################################################
 # MODIFIED AUTOENCODER MODEL WITH RANDOM NOISE
@@ -256,12 +391,14 @@ class HyperspectralAutoencoderRandomNoise(nn.Module):
         filter = self.get_current_filter().unsqueeze(0)  # Add batch dimension
         with torch.no_grad():
             _, recon_filter = self.pipeline(filter)
+            _, recon_filter = self.pipeline(recon_filter)
         return recon_filter[0]  # Remove batch dimension
 
     def get_reconstructed_filter_with_grad(self):
         """Get the reconstructed filter from the full pipeline"""
         filter = self.get_current_filter().unsqueeze(0)  # Add batch dimension
         _, recon_filter = self.pipeline(filter)
+        _, recon_filter = self.pipeline(recon_filter)
         return recon_filter[0]  # Remove batch dimension
 
     def add_random_noise(self, tensor):

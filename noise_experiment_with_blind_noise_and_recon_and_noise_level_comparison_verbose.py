@@ -42,6 +42,7 @@ in_channels = 100
 ###############################################################################
 # TRAINING FUNCTION WITH RANDOM NOISE
 ###############################################################################
+
 def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, min_snr=10, max_snr=40, 
                            initial_filter_params=None, batch_size=10, num_epochs=500, 
                            encoder_lr=0.001, decoder_lr=0.001, filter_scale_factor=10.0,
@@ -92,13 +93,13 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Load or use provided data
+    # Load or use provided data - KEEP DATA ON CPU
     if train_data is None:
         data = load_aviris_forest_data(base_path="AVIRIS_FOREST_SIMPLE_SELECT", tile_size=128, 
                                       cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
-        data = data.to(device)
+        # Keep data on CPU - don't move to device here
     else:
-        data = train_data.to(device)
+        data = train_data  # Keep on CPU
     
     print("Training data shape:", data.shape)
     
@@ -106,7 +107,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     dataset = TensorDataset(data)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
-    # Create test dataloader if test data is provided
+    # Create test dataloader if test data is provided - KEEP ON CPU
     test_loader = None
     if test_data is not None:
         test_dataset = TensorDataset(test_data)
@@ -185,14 +186,15 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     plt.close()
     
     # Before training, get reconstruction of sample from train set
+    # Use a small batch for visualization to save memory
     sample_idx = min(5, len(data) - 1)  # Make sure index is within range
-    sample_tensor = data[sample_idx:sample_idx+1]  # Keep as tensor with batch dimension
+    sample_tensor = data[sample_idx:sample_idx+1].to(device)  # Move only this small sample to GPU
     
     # If test data is provided, also get test sample
     test_sample_tensor = None
     if test_data is not None:
         test_sample_idx = min(5, len(test_data) - 1)
-        test_sample_tensor = test_data[test_sample_idx:test_sample_idx+1].to(device)
+        test_sample_tensor = test_data[test_sample_idx:test_sample_idx+1].to(device)  # Move only this small sample to GPU
     
     # Generate initial reconstruction for visualization
     initial_recon_path = os.path.join(recon_dir, "initial_reconstruction.png")
@@ -255,7 +257,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         
         model.train()
         for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}"):
-            x = batch[0]
+            x = batch[0].to(device)  # Move batch to GPU here
             
             # Forward pass with random noise
             recon, _, batch_snr = model(x)
@@ -273,6 +275,10 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
             
             epoch_loss += loss.item()
             num_batches += 1
+            
+            # Clear GPU cache to free memory
+            x = x.cpu()  # Move batch back to CPU
+            torch.cuda.empty_cache()  # Clear CUDA cache
         
         # Calculate average loss and SNR for epoch
         avg_loss = epoch_loss / num_batches
@@ -374,6 +380,9 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
         
         # Print epoch summary
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.6f}, Avg SNR: {avg_snr:.2f} dB, Condition Number: {current_condition_number:.4f}")
+        
+        # Clear memory
+        torch.cuda.empty_cache()
     
     # Get final filter and shape
     final_filter = model.get_current_filter().detach().cpu()
@@ -681,6 +690,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
 ###############################################################################
 # FIXED SHAPE DECODER TRAINING WITH METRICS
 ###############################################################################
+
 def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, 
                           noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, 
                           output_dir, viz_interval_stage2=1):
@@ -739,31 +749,41 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         'test_sam': []
     }
     
-    # Get sample batch for visualization
-    train_sample = next(iter(train_loader))
+    # Get sample batch for visualization - keep on CPU until needed
+    train_iter = iter(train_loader)
+    train_sample = next(train_iter)
     if isinstance(train_sample, list) or isinstance(train_sample, tuple):
         train_sample = train_sample[0]
-    train_sample = train_sample[:1].to(device)
+    train_sample = train_sample[:1]  # Only use first sample in batch
     
-    test_sample = next(iter(test_loader))
+    test_iter = iter(test_loader)
+    test_sample = next(test_iter)
     if isinstance(test_sample, list) or isinstance(test_sample, tuple):
         test_sample = test_sample[0]
-    test_sample = test_sample[:1].to(device)
+    test_sample = test_sample[:1]  # Only use first sample in batch
     
     # Initial visualization and metrics
     model.eval()
     with torch.no_grad():
+        # Move data to device only for evaluation
+        train_sample_gpu = train_sample.to(device)
+        test_sample_gpu = test_sample.to(device)
+        
         # Train sample
-        train_recon, _ = model(train_sample, add_noise=False)
-        train_mse = ((train_recon - train_sample) ** 2).mean().item()
-        train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-        train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
+        train_recon, _ = model(train_sample_gpu, add_noise=False)
+        train_mse = ((train_recon - train_sample_gpu) ** 2).mean().item()
+        train_psnr = calculate_psnr(train_sample_gpu.cpu(), train_recon.cpu())
+        train_sam = calculate_sam(train_sample_gpu.cpu(), train_recon.cpu())
         
         # Test sample
-        test_recon, _ = model(test_sample, add_noise=False)
-        test_mse = ((test_recon - test_sample) ** 2).mean().item()
-        test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-        test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+        test_recon, _ = model(test_sample_gpu, add_noise=False)
+        test_mse = ((test_recon - test_sample_gpu) ** 2).mean().item()
+        test_psnr = calculate_psnr(test_sample_gpu.cpu(), test_recon.cpu())
+        test_sam = calculate_sam(test_sample_gpu.cpu(), test_recon.cpu())
+        
+        # Clear GPU memory
+        del train_recon, test_recon
+        torch.cuda.empty_cache()
     
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
@@ -777,7 +797,9 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     initial_recon_path = os.path.join(recon_dir, "reconstruction_epoch_0.png")
     with torch.no_grad():
         model.eval()
-        train_out, _ = model(train_sample, add_noise=False)
+        # Move data to device for visualization
+        train_sample_gpu = train_sample.to(device)
+        train_out, _ = model(train_sample_gpu, add_noise=False)
         
         # Plot original, reconstruction, and difference
         plt.figure(figsize=(15, 5))
@@ -786,7 +808,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         band_idx = train_sample.shape[-1] // 2
         
         # Get data as numpy
-        orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+        orig = train_sample_gpu[0].permute(2, 0, 1)[band_idx].cpu().numpy()
         recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
         diff = orig - recon
         
@@ -818,6 +840,10 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         plt.tight_layout()
         plt.savefig(initial_recon_path)
         plt.close()
+        
+        # Clear GPU memory
+        del train_out, train_sample_gpu
+        torch.cuda.empty_cache()
     
     # Print initial metrics with more detail
     print(f"\nInitial {shape_name} metrics at {noise_level} dB:")
@@ -847,6 +873,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             else:
                 x = batch
             
+            # Move batch to GPU
             x = x.to(device)
             
             # Forward pass
@@ -862,6 +889,10 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             
             train_epoch_loss += loss.item()
             num_batches += 1
+            
+            # Clear GPU memory after processing each batch
+            del x, recon
+            torch.cuda.empty_cache()
         
         # Calculate average training loss
         avg_train_loss = train_epoch_loss / num_batches
@@ -869,17 +900,25 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Evaluation phase
         model.eval()
         with torch.no_grad():
+            # Move evaluation samples to GPU
+            train_sample_gpu = train_sample.to(device)
+            test_sample_gpu = test_sample.to(device)
+            
             # Evaluate on train sample (without noise for clean comparison)
-            train_recon, _ = model(train_sample, add_noise=False)
-            train_mse = ((train_recon - train_sample) ** 2).mean().item()
-            train_psnr = calculate_psnr(train_sample.cpu(), train_recon.cpu())
-            train_sam = calculate_sam(train_sample.cpu(), train_recon.cpu())
+            train_recon, _ = model(train_sample_gpu, add_noise=False)
+            train_mse = ((train_recon - train_sample_gpu) ** 2).mean().item()
+            train_psnr = calculate_psnr(train_sample_gpu.cpu(), train_recon.cpu())
+            train_sam = calculate_sam(train_sample_gpu.cpu(), train_recon.cpu())
             
             # Evaluate on test sample (without noise for clean comparison)
-            test_recon, _ = model(test_sample, add_noise=False)
-            test_mse = ((test_recon - test_sample) ** 2).mean().item()
-            test_psnr = calculate_psnr(test_sample.cpu(), test_recon.cpu())
-            test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
+            test_recon, _ = model(test_sample_gpu, add_noise=False)
+            test_mse = ((test_recon - test_sample_gpu) ** 2).mean().item()
+            test_psnr = calculate_psnr(test_sample_gpu.cpu(), test_recon.cpu())
+            test_sam = calculate_sam(test_sample_gpu.cpu(), test_recon.cpu())
+            
+            # Clear GPU memory after evaluation
+            del train_recon, test_recon, train_sample_gpu, test_sample_gpu
+            torch.cuda.empty_cache()
             
             # Test set evaluation
             test_loss = 0.0
@@ -889,10 +928,15 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 else:
                     x = batch
                 
+                # Move batch to GPU
                 x = x.to(device)
                 recon, _ = model(x, add_noise=False)
                 loss = criterion(recon, x)
                 test_loss += loss.item()
+                
+                # Clear GPU memory after processing each batch
+                del x, recon
+                torch.cuda.empty_cache()
             
             avg_test_loss = test_loss / len(test_loader)
         
@@ -921,7 +965,9 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             best_recon_path = os.path.join(shape_dir, "best_reconstruction.png")
             with torch.no_grad():
                 model.eval()
-                train_out, _ = model(train_sample, add_noise=False)
+                # Move data to GPU for visualization
+                train_sample_gpu = train_sample.to(device)
+                train_out, _ = model(train_sample_gpu, add_noise=False)
                 
                 # Plot original, reconstruction, and difference
                 plt.figure(figsize=(15, 5))
@@ -930,7 +976,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 band_idx = train_sample.shape[-1] // 2
                 
                 # Get data as numpy
-                orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                orig = train_sample_gpu[0].permute(2, 0, 1)[band_idx].cpu().numpy()
                 recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
                 diff = orig - recon
                 
@@ -962,6 +1008,10 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 plt.tight_layout()
                 plt.savefig(best_recon_path)
                 plt.close()
+                
+                # Clear GPU memory
+                del train_out, train_sample_gpu
+                torch.cuda.empty_cache()
             
             print(f"  New best model at epoch {epoch+1} - Test MSE: {best_test_loss:.6f}")
         
@@ -970,7 +1020,9 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             with torch.no_grad():
                 model.eval()
-                train_out, _ = model(train_sample, add_noise=False)
+                # Move data to GPU for visualization
+                train_sample_gpu = train_sample.to(device)
+                train_out, _ = model(train_sample_gpu, add_noise=False)
                 
                 # Plot original, reconstruction, and difference
                 plt.figure(figsize=(15, 5))
@@ -979,7 +1031,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 band_idx = train_sample.shape[-1] // 2
                 
                 # Get data as numpy
-                orig = train_sample[0].permute(2, 0, 1)[band_idx].cpu().numpy()
+                orig = train_sample_gpu[0].permute(2, 0, 1)[band_idx].cpu().numpy()
                 recon = train_out[0].permute(2, 0, 1)[band_idx].cpu().numpy()
                 diff = orig - recon
                 
@@ -1011,6 +1063,13 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 plt.tight_layout()
                 plt.savefig(recon_path)
                 plt.close()
+                
+                # Clear GPU memory
+                del train_out, train_sample_gpu
+                torch.cuda.empty_cache()
+        
+        # Clear memory at the end of each epoch
+        torch.cuda.empty_cache()
     
     # Save final detailed metrics
     print(f"\nFinal {shape_name} metrics at {noise_level} dB after {num_epochs} epochs:")
