@@ -442,7 +442,7 @@ def plot_loss_curves(train_losses, test_losses, save_path=None, return_fig=False
     plt.show()
     plt.close()
 
-def process_and_load_data(tile_size=100, use_cache='cache_simple', folder='all', force_cache=False):
+def process_and_load_data(tile_size=128, use_cache='cache_simple', folder='all', force_cache=False):
     """Process AVIRIS data and return DataLoader objects"""
     # Define cache directory and file
     cache_dir = use_cache
@@ -1250,7 +1250,7 @@ def load_shapes_from_directory(load_shapes_dir):
 # Example usage in a notebook:
 """
 # Quick start example
-tiles = process_and_load_data(tile_size=100)
+tiles = process_and_load_data(tile_size=128)
 
 # Run stage 1 to learn filter shapes
 stage1_results = train_stage1(

@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 # Function to load AVIRIS data from multiple folders with proper path handling
-def load_aviris_data(aviris_base_path="AVIRIS_SWIR", tile_size=100, num_bands=100, cache_file=None, use_cache=False):
+def load_aviris_data(aviris_base_path="AVIRIS_SWIR", tile_size=128, num_bands=100, cache_file=None, use_cache=False):
     """
     Load AVIRIS hyperspectral data from all subfolders and crop it into tiles
 
@@ -509,7 +509,7 @@ def train_and_visualize_autoencoder(model_path, output_dir, batch_size=10, num_e
     debug = True
     
     # Load AVIRIS_SWIR data from both folders with caching support
-    data = load_aviris_data(aviris_base_path="AVIRIS_SWIR", tile_size=100, num_bands=100, cache_file=cache_file, use_cache=use_cache)
+    data = load_aviris_data(aviris_base_path="AVIRIS_SWIR", tile_size=128, num_bands=100, cache_file=cache_file, use_cache=use_cache)
     data = data.to(device)
     
     if debug:

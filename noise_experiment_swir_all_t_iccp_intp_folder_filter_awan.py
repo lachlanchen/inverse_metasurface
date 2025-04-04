@@ -37,7 +37,7 @@ def calculate_condition_number(filters):
     return condition_number
 
 # Function to load AVIRIS_SWIR_INTP data from selected subfolders
-def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cache_file=None, use_cache=False, folder_patterns="all"):
+def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
     """
     Load pre-processed AVIRIS_SWIR_INTP hyperspectral data from selected subfolders and crop it into tiles
     
@@ -531,7 +531,7 @@ def train_with_noise_level(model_path, output_dir, noise_level, batch_size=10, n
     print(f"Using device: {device}")
     
     # Load AVIRIS_SWIR_INTP data with caching support
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                 cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
     data = data.to(device)
     
@@ -849,7 +849,7 @@ def train_decoder_only(model_path, shape_path, output_dir, noise_level, num_epoc
     print(f"Loaded {shape_type} shape from: {shape_path}")
     
     # Load AVIRIS_SWIR_INTP data
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                 cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
     data = data.to(device)
     

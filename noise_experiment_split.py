@@ -71,7 +71,7 @@ def split_data(data, test_size=0.2, seed=42):
     return train_data, test_data
 
 # Function to load AVIRIS data with proper path handling
-def load_aviris_data(aviris_path, tile_size=100, num_bands=100, cache_file=None, use_cache=False):
+def load_aviris_data(aviris_path, tile_size=128, num_bands=100, cache_file=None, use_cache=False):
     """
     Load AVIRIS hyperspectral data and crop it into tiles
     """
@@ -1030,7 +1030,7 @@ def main():
     
     # Load full dataset
     print("Loading AVIRIS data...")
-    full_data = load_aviris_data(aviris_path, tile_size=100, num_bands=100, cache_file=args.cache, use_cache=args.use_cache)
+    full_data = load_aviris_data(aviris_path, tile_size=128, num_bands=100, cache_file=args.cache, use_cache=args.use_cache)
     
     # Split into train and test sets
     print(f"Splitting data into train and test sets (test_size={args.test_size})...")

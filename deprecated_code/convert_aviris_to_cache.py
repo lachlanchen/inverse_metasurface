@@ -7,7 +7,7 @@ import argparse
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-def process_aviris_to_tiles(aviris_path, tile_size=100, output_file=None, 
+def process_aviris_to_tiles(aviris_path, tile_size=128, output_file=None, 
                             percentile_clip=(0.5, 99.5), outlier_threshold=3.0,
                             visualize=True, viz_dir="aviris_visualization",
                             verbose=True):

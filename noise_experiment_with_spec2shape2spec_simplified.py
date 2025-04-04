@@ -103,7 +103,7 @@ def plot_shape_with_c4(shape, title, save_path):
 ###############################################################################
 # DATA LOADING FUNCTIONS
 ###############################################################################
-def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cache_file=None, use_cache=False, folder_patterns="all"):
+def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
     """
     Load pre-processed AVIRIS_SWIR_INTP hyperspectral data from selected subfolders and crop it into tiles
     
@@ -488,7 +488,7 @@ def train_with_noise_level(shape2spec_path, spec2shape_path, output_dir, noise_l
     
     # Load or use provided data
     if train_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                     cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         data = data.to(device)
     else:
@@ -884,7 +884,7 @@ def train_decoder_with_comparison(shape2spec_path, spec2shape_path, shapes_dict,
     
     # Load data if not provided
     if train_data is None or test_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                      cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         
         # Split data into training and testing sets (80% train, 20% test)
@@ -1158,7 +1158,7 @@ def main():
     
     # Load and split data first
     print("Loading and splitting data into train/test sets...")
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                  cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
     
     # Split data into training and testing sets (80% train, 20% test)

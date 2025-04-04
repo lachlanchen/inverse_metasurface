@@ -265,7 +265,7 @@ class CompressionModel(nn.Module):
         
         # Select decoder based on type
         if decoder_type.lower() == 'awan':
-            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=8, n_DRBs=2)
+            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
         elif decoder_type.lower() == 'cnn':
             self.decoder = SimpleCNNDecoder(in_channels=latent_dim, out_channels=in_channels)
         else:
@@ -279,7 +279,7 @@ class CompressionModel(nn.Module):
         snr = 10 ** (snr_db / 10)
         
         # Calculate signal power
-        signal_power = torch.mean(z ** 2, dim=(1, 2, 3), keepdim=True)
+        signal_power = torch.mean(z ** 2, dim=(1, 2, 3), keepdim=True).detach()
         
         # Calculate noise power based on SNR
         noise_power = signal_power / snr
@@ -510,6 +510,59 @@ def visualize_filter(filter_A, save_path, include_shape=False, shape_pred=None, 
     if include_shape and shape_pred is not None and filter_output is not None:
         fsf_path = save_path.replace('.png', '_with_shape.png')
         visualize_filter_with_shape(filter_A_np, shape_pred, filter_output, fsf_path)
+
+def calculate_psnr(original, reconstructed, max_value=1.0):
+    """
+    Calculate Peak Signal-to-Noise Ratio between original and reconstructed images.
+    
+    Parameters:
+    original: Original image tensor of shape (B, C, H, W)
+    reconstructed: Reconstructed image tensor of shape (B, C, H, W)
+    max_value: Maximum possible pixel value (default: 1.0 for normalized images)
+    
+    Returns:
+    float: PSNR value in dB (higher is better)
+    """
+    mse = torch.mean((original - reconstructed) ** 2).item()
+    if mse == 0:
+        return float('inf')
+    return 20 * torch.log10(torch.tensor(max_value) / torch.sqrt(torch.tensor(mse))).item()
+
+
+def calculate_sam(original, reconstructed, eps=1e-8):
+    """
+    Calculate Spectral Angle Mapper between original and reconstructed images.
+    
+    Parameters:
+    original: Original image tensor of shape (B, C, H, W)
+    reconstructed: Reconstructed image tensor of shape (B, C, H, W)
+    eps: Small value to avoid division by zero
+    
+    Returns:
+    float: Mean SAM value in radians (lower is better)
+    """
+    # Reshape to (B*H*W, C) to compute spectral angles
+    orig_flat = original.permute(0, 2, 3, 1).reshape(-1, original.shape[1])
+    recon_flat = reconstructed.permute(0, 2, 3, 1).reshape(-1, reconstructed.shape[1])
+    
+    # Calculate dot product
+    dot_product = torch.sum(orig_flat * recon_flat, dim=1)
+    
+    # Calculate magnitudes
+    orig_norm = torch.norm(orig_flat, dim=1)
+    recon_norm = torch.norm(recon_flat, dim=1)
+    
+    # Calculate cosine similarity
+    cos_sim = dot_product / (orig_norm * recon_norm + eps)
+    
+    # Clamp to avoid numerical issues
+    cos_sim = torch.clamp(cos_sim, -1.0, 1.0)
+    
+    # Calculate angle in radians
+    angle = torch.acos(cos_sim)
+    
+    # Return mean angle
+    return torch.mean(angle).item()
 
 def visualize_reconstruction(model, data_loader, device, save_path, num_samples=4):
     """Visualize original and reconstructed images"""

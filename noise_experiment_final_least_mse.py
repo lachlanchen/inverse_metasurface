@@ -56,7 +56,7 @@ def calculate_condition_number(filters):
     return condition_number
 
 # Function to load AVIRIS_SWIR_INTP data from selected subfolders
-def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cache_file=None, use_cache=False, folder_patterns="all"):
+def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
     """
     Load pre-processed AVIRIS_SWIR_INTP hyperspectral data from selected subfolders and crop it into tiles
     
@@ -621,7 +621,7 @@ def train_with_noise_level(model_path, output_dir, noise_level, batch_size=10, n
     
     # Load or use provided data
     if train_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                     cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         data = data.to(device)
     else:
@@ -1041,7 +1041,7 @@ def train_decoder_with_comparison(model_path, shapes_dict, output_dir, noise_lev
     
     # Load data if not provided
     if train_data is None or test_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                     cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         
         # Split data into training and testing sets (80% train, 20% test)
@@ -1464,7 +1464,7 @@ def main():
     
     # Load and split data first
     print("Loading and splitting data into train/test sets...")
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
     
     # Split data into training and testing sets (80% train, 20% test)

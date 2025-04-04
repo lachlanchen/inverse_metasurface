@@ -35,7 +35,7 @@ def calculate_condition_number(filters):
     return condition_number
 
 # Function to load AVIRIS data with proper path handling
-def load_aviris_data(aviris_path, tile_size=100, num_bands=100, cache_file=None, use_cache=False):
+def load_aviris_data(aviris_path, tile_size=128, num_bands=100, cache_file=None, use_cache=False):
     """
     Load AVIRIS hyperspectral data and crop it into tiles
 
@@ -476,7 +476,7 @@ def train_and_visualize_autoencoder(model_path, output_dir, batch_size=10, num_e
     aviris_path = "AVIRIS/AV320231008t173943_L2A_OE_main_98b13fff/AV320231008t173943_L2A_OE_main_98b13fff_RFL_ORT.hdr"
     
     # Load real AVIRIS data with caching support
-    data = load_aviris_data(aviris_path, tile_size=100, num_bands=100, cache_file=cache_file, use_cache=use_cache)
+    data = load_aviris_data(aviris_path, tile_size=128, num_bands=100, cache_file=cache_file, use_cache=use_cache)
     data = data.to(device)
     
     if debug:

@@ -14,6 +14,11 @@ from tqdm import tqdm
 import math
 import random
 
+from AWAN import AWAN
+latent_dim = 11
+in_channels = 100
+
+
 ###############################################################################
 # MODEL DEFINITIONS FROM THREE_STAGE_TRANSMITTANCE.PY
 ###############################################################################
@@ -260,7 +265,7 @@ def generate_initial_filter(device=None):
 ###############################################################################
 # DATA LOADING FUNCTIONS
 ###############################################################################
-def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cache_file=None, use_cache=False, folder_patterns="all"):
+def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, cache_file=None, use_cache=False, folder_patterns="all"):
     """
     Load pre-processed AVIRIS_SWIR_INTP hyperspectral data from selected subfolders and crop it into tiles
     
@@ -284,6 +289,7 @@ def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cach
         print(f"Loading processed data from cache: {cache_file}")
         try:
             tiles_tensor = torch.load(cache_file)
+            tiles_tensor = tiles_tensor.permute(0, 2, 3, 1)
             print(f"Loaded data from cache: {tiles_tensor.shape}")
             return tiles_tensor
         except Exception as e:
@@ -465,13 +471,15 @@ def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, cach
 class DecoderCNN5Layer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.decoder = nn.Sequential(
-            nn.Conv2d(11, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 100, kernel_size=3, padding=1)
-        )
+        # self.decoder = nn.Sequential(
+        #     nn.Conv2d(11, 32, kernel_size=3, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(32, 64, kernel_size=3, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, 100, kernel_size=3, padding=1)
+        # )
+
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
     
     def forward(self, x):
         return self.decoder(x)
@@ -529,13 +537,14 @@ class HyperspectralAutoencoder(nn.Module):
         #     self.filter_params = nn.Parameter(recon_filters[0])  # Use [0] to remove batch dimension
         
         # Decoder: 3-layer convolutional network
-        self.decoder = nn.Sequential(
-            nn.Conv2d(11, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 100, kernel_size=3, padding=1)
-        )
+        # self.decoder = nn.Sequential(
+        #     nn.Conv2d(11, 32, kernel_size=3, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(32, 64, kernel_size=3, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, 100, kernel_size=3, padding=1)
+        # )
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
     
     def get_current_filter(self):
         """Return the current learnable filter parameters"""
@@ -553,6 +562,13 @@ class HyperspectralAutoencoder(nn.Module):
         filter = self.get_current_filter().unsqueeze(0)  # Add batch dimension
         with torch.no_grad():
             _, recon_filter = self.pipeline(filter)
+        return recon_filter[0]  # Remove batch dimension
+
+    def get_reconstructed_filter_with_grad(self):
+        """Get the reconstructed filter from the full pipeline"""
+        filter = self.get_current_filter().unsqueeze(0)  # Add batch dimension
+        # with torch.no_grad():
+        _, recon_filter = self.pipeline(filter)
         return recon_filter[0]  # Remove batch dimension
 
     def add_noise(self, tensor):
@@ -585,13 +601,13 @@ class HyperspectralAutoencoder(nn.Module):
         batch_size, height, width, spectral_bands = x.shape
         
         # Get current filter
-        filter = self.get_current_filter()  # Shape: [11, 100]
+        filter = self.get_reconstructed_filter_with_grad()  # Shape: [11, 100]
         
         # Convert input from [B,H,W,C] to [B,C,H,W] format for PyTorch convolution
         x_channels_first = x.permute(0, 3, 1, 2)
         
         # Normalize filter for filtering
-        filter_normalized = filter / 50.0  # Shape: [11, 100]
+        filter_normalized = filter / 10.0  # Shape: [11, 100]
         
         # Use efficient tensor operations for spectral filtering
         # Einstein summation: 'bchw,oc->bohw'
@@ -659,7 +675,7 @@ def train_with_noise_level(shape2filter_path, filter2shape_path, output_dir, noi
     
     # Load or use provided data
     if train_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                     cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         data = data.to(device)
     else:
@@ -1117,7 +1133,7 @@ def train_decoder_with_comparison(shape2filter_path, filter2shape_path, shapes_d
     
     # Load data if not provided
     if train_data is None or test_data is None:
-        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+        data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                      cache_file=cache_file, use_cache=use_cache, folder_patterns=folder_patterns)
         
         # Split data into training and testing sets (80% train, 20% test)
@@ -1488,7 +1504,7 @@ def main():
     
     # Load and split data first
     print("Loading and splitting data into train/test sets...")
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=100, 
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR_INTP", tile_size=128, 
                                  cache_file=cache_path, use_cache=args.use_cache, folder_patterns=folder_patterns)
     
     # Split data into training and testing sets (80% train, 20% test)

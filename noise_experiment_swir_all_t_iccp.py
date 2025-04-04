@@ -36,7 +36,7 @@ def calculate_condition_number(filters):
     return condition_number
 
 # Function to load AVIRIS_SWIR data from all available subfolders
-def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=100, cache_file=None, use_cache=False):
+def load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=128, cache_file=None, use_cache=False):
     """
     Load pre-processed AVIRIS_SWIR hyperspectral data from all available subfolders and crop it into tiles
     
@@ -522,7 +522,7 @@ def train_with_noise_level(model_path, output_dir, noise_level, batch_size=10, n
     print(f"Using device: {device}")
     
     # Load AVIRIS_SWIR data with caching support
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=100, cache_file=cache_file, use_cache=use_cache)
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=128, cache_file=cache_file, use_cache=use_cache)
     data = data.to(device)
     
     print("Data shape:", data.shape)
@@ -837,7 +837,7 @@ def train_decoder_only(model_path, shape_path, output_dir, noise_level, num_epoc
     print(f"Loaded {shape_type} shape from: {shape_path}")
     
     # Load AVIRIS_SWIR data
-    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=100, cache_file=cache_file, use_cache=use_cache)
+    data = load_aviris_swir_data(swir_base_path="AVIRIS_SWIR", tile_size=128, cache_file=cache_file, use_cache=use_cache)
     data = data.to(device)
     
     # Create dataset and dataloader

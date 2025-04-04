@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 # Function to load AVIRIS_SWIR data with proper path handling
-def load_aviris_swir_data(swir_path="AVIRIS_SWIR/torch/aviris_swir.pt", tile_size=100, cache_file=None, use_cache=False):
+def load_aviris_swir_data(swir_path="AVIRIS_SWIR/torch/aviris_swir.pt", tile_size=128, cache_file=None, use_cache=False):
     """
     Load pre-processed AVIRIS_SWIR hyperspectral data and crop it into tiles
     
@@ -443,7 +443,7 @@ def train_and_visualize_autoencoder(model_path, output_dir, batch_size=10, num_e
     
     # Load AVIRIS_SWIR data with caching support
     swir_path = "AVIRIS_SWIR/torch/aviris_swir.pt"
-    data = load_aviris_swir_data(swir_path=swir_path, tile_size=100, cache_file=cache_file, use_cache=use_cache)
+    data = load_aviris_swir_data(swir_path=swir_path, tile_size=128, cache_file=cache_file, use_cache=use_cache)
     data = data.to(device)
     
     if debug:

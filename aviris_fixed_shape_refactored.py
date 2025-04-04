@@ -36,13 +36,22 @@ import random
 from datetime import datetime
 import numpy.linalg as LA
 
-# Import common components from base file
+# # Import common components from base file
+# from aviris_compression_base import (
+#     set_seed, calculate_condition_number, AvirisDataset, LinearEncoder, SimpleCNNDecoder,
+#     CompressionModel, create_tiles, process_and_cache_data, plot_loss_curves, 
+#     visualize_filter, visualize_filter_with_shape, visualize_reconstruction,
+#     plot_shape_with_c4
+# )
+
 from aviris_compression_base import (
     set_seed, calculate_condition_number, AvirisDataset, LinearEncoder, SimpleCNNDecoder,
-    CompressionModel, create_tiles, process_and_cache_data, plot_loss_curves, 
-    visualize_filter, visualize_filter_with_shape, visualize_reconstruction,
-    plot_shape_with_c4
+    CompressionModel, plot_loss_curves, visualize_filter, visualize_filter_with_shape, 
+    visualize_reconstruction, plot_shape_with_c4
 )
+from aviris_compression_base import calculate_psnr, calculate_sam
+from aviris_data_utils import process_and_cache_filtered_data as process_and_cache_data
+
 
 # Import AWAN if available
 try:
@@ -157,7 +166,7 @@ class FixedShapeModel(nn.Module):
         
         # Create decoder based on type
         if decoder_type.lower() == 'awan':
-            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=8, n_DRBs=2)
+            self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
         elif decoder_type.lower() == 'cnn':
             self.decoder = SimpleCNNDecoder(in_channels=latent_dim, out_channels=in_channels)
         else:
