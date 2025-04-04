@@ -238,7 +238,7 @@ class HyperspectralAutoencoderRandomNoise(nn.Module):
             self.filter_params = nn.Parameter(torch.rand(11, 100, device=self.device))
         
         # Decoder: AWAN
-        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
     
     def get_current_filter(self):
         """Return the current learnable filter parameters"""
@@ -368,7 +368,7 @@ class FixedShapeModel(nn.Module):
         print(f"Fixed shape encoder initialized with filter of shape {self.fixed_filter.shape}")
         
         # Decoder
-        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
     
     def add_noise(self, z):
         """Add noise with fixed SNR level"""

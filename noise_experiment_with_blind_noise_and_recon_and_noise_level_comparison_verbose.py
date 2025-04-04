@@ -1110,9 +1110,11 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     
     return metrics
 
-###############################################################################
-# TRAINING WITH FIXED SHAPES AT DIFFERENT NOISE LEVELS
-###############################################################################
+# ###############################################################################
+# # TRAINING WITH FIXED SHAPES AT DIFFERENT NOISE LEVELS
+# ###############################################################################
+
+
 def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir, 
                                noise_levels, num_epochs, batch_size, decoder_lr, 
                                filter_scale_factor, train_loader, test_loader,
@@ -1240,13 +1242,18 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
                 del temp_model  # Clean up memory
         
         # Create comparison plots for this noise level
+        # Define a list of colors for each shape
+        colors = ['blue', 'red', 'green', 'purple', 'orange', 'brown', 'pink', 'gray', 'cyan', 'magenta']
+        shape_colors = {shape_name: colors[i % len(colors)] for i, shape_name in enumerate(shapes.keys())}
+
         # 1. MSE comparison
         plt.figure(figsize=(12, 8))
         for shape_name in shapes:
+            color = shape_colors[shape_name]
             plt.plot(range(num_epochs+1), noise_metrics['train_loss'][shape_name], 
-                    label=f"{shape_name.capitalize()} Train")
+                    color=color, label=f"{shape_name.capitalize()} Train")
             plt.plot(range(num_epochs+1), noise_metrics['test_loss'][shape_name], 
-                    linestyle='--', label=f"{shape_name.capitalize()} Test")
+                    color=color, linestyle='--', label=f"{shape_name.capitalize()} Test")
         plt.grid(True)
         plt.xlabel('Epochs')
         plt.ylabel('MSE Loss')
@@ -1258,10 +1265,11 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
         # 2. PSNR comparison
         plt.figure(figsize=(12, 8))
         for shape_name in shapes:
+            color = shape_colors[shape_name]
             plt.plot(range(num_epochs+1), noise_metrics['train_psnr'][shape_name], 
-                    label=f"{shape_name.capitalize()} Train")
+                    color=color, label=f"{shape_name.capitalize()} Train")
             plt.plot(range(num_epochs+1), noise_metrics['test_psnr'][shape_name], 
-                    linestyle='--', label=f"{shape_name.capitalize()} Test")
+                    color=color, linestyle='--', label=f"{shape_name.capitalize()} Test")
         plt.grid(True)
         plt.xlabel('Epochs')
         plt.ylabel('PSNR (dB)')
@@ -1273,10 +1281,11 @@ def train_multiple_fixed_shapes(shapes_dict, shape2filter_path, output_dir,
         # 3. SAM comparison
         plt.figure(figsize=(12, 8))
         for shape_name in shapes:
+            color = shape_colors[shape_name]
             plt.plot(range(num_epochs+1), noise_metrics['train_sam'][shape_name], 
-                    label=f"{shape_name.capitalize()} Train")
+                    color=color, label=f"{shape_name.capitalize()} Train")
             plt.plot(range(num_epochs+1), noise_metrics['test_sam'][shape_name], 
-                    linestyle='--', label=f"{shape_name.capitalize()} Test")
+                    color=color, linestyle='--', label=f"{shape_name.capitalize()} Test")
         plt.grid(True)
         plt.xlabel('Epochs')
         plt.ylabel('SAM (radians)')
@@ -1681,7 +1690,15 @@ def main():
     print(f"{'='*50}\n")
     
     # Define noise levels for fixed shape training
-    fixed_noise_levels = [10, 20, 30, 40]
+    fixed_noise_levels = [
+        10, 
+        # 15, 
+        20, 
+        # 25, 
+        30, 
+        # 35, 
+        40
+    ]
     
     # Run training for each shape at each noise level
     results = train_multiple_fixed_shapes(

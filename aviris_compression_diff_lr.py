@@ -63,7 +63,7 @@ class CompressionModel(nn.Module):
     def __init__(self, in_channels=100, latent_dim=11):
         super(CompressionModel, self).__init__()
         self.encoder = LinearEncoder(in_dim=in_channels, out_dim=latent_dim)
-        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=4)
+        self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
         
     def add_noise(self, z, min_snr_db=10, max_snr_db=40):
         """Add random noise with SNR between min_snr_db and max_snr_db"""
