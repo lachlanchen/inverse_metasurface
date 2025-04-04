@@ -836,12 +836,12 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     #     test_sam = calculate_sam(test_sample.cpu(), test_recon.cpu())
 
     # Get representative samples for visualization
-    train_viz_sample = next(iter(train_loader))
+    train_sample = train_viz_sample = next(iter(train_loader))
     if isinstance(train_viz_sample, list) or isinstance(train_viz_sample, tuple):
         train_viz_sample = train_viz_sample[0]
     train_viz_sample = train_viz_sample[:1].to(device)
 
-    test_viz_sample = next(iter(test_loader))
+    test_sample = test_viz_sample = next(iter(test_loader))
     if isinstance(test_viz_sample, list) or isinstance(test_viz_sample, tuple):
         test_viz_sample = test_viz_sample[0]
     test_viz_sample = test_viz_sample[:1].to(device)
@@ -867,9 +867,9 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     # Generate visualizations with a single sample
     with torch.no_grad():
         # Get reconstruction for visualization
-        train_viz_recon, _ = model(train_viz_sample, add_noise=False)
-        test_viz_recon, _ = model(test_viz_sample, add_noise=False)
-    
+        train_recon, _ = model(train_viz_sample, add_noise=False)
+        test_recon, _ = model(test_viz_sample, add_noise=False)
+
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
     metrics['test_loss'].append(test_mse)
@@ -1000,8 +1000,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Generate visualizations with a single sample
         with torch.no_grad():
             # Get reconstruction for visualization
-            train_viz_recon, _ = model(train_viz_sample, add_noise=False)
-            test_viz_recon, _ = model(test_viz_sample, add_noise=False)
+            train_recon, _ = model(train_viz_sample, add_noise=False)
+            test_recon, _ = model(test_viz_sample, add_noise=False)
             
             # Test set evaluation
             test_loss = 0.0
