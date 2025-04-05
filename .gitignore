@@ -2,9 +2,11 @@ __pycache__
 
 *.txt
 *.csv
+*.pdf
 
 *.png
 *.jpg
+*.mp4
 
 *.pt
 *.npz
