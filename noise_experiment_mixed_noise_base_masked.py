@@ -37,6 +37,8 @@ from AWAN import AWAN
 latent_dim = 11
 in_channels = 100
 
+from shape2filter_with_s4_comparison import Shape2FilterWithS4
+
 # def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None, data_range=1.0, epsilon=1e-8, 
 #                               desc="Calculating metrics", is_fixed_shape=False):
 #     """
@@ -1442,10 +1444,21 @@ class FixedShapeModel(nn.Module):
         self.noise_level = noise_level
         self.filter_scale_factor = filter_scale_factor
         
+        # # Load shape2filter model
+        # self.shape2filter = Shape2FilterModel().to(device)
+        # self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
+        # self.shape2filter.eval()  # Set to evaluation mode
+
         # Load shape2filter model
-        self.shape2filter = Shape2FilterModel().to(device)
-        self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
-        self.shape2filter.eval()  # Set to evaluation mode
+        if use_s4:
+            self.shape2filter = Shape2FilterWithS4(mode="transmittance", max_workers=4, nn_model_path="outputs_three_stage_20250322_145925/stageA/shape2spec_stageA.pt")
+        else:
+            self.shape2filter = Shape2FilterModel().to(device)
+            self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
+            self.shape2filter.eval()  # Set to evaluation mode
+        
+            for param in self.shape2filter.parameters():
+                param.requires_grad = False
         
         for param in self.shape2filter.parameters():
             param.requires_grad = False
@@ -1478,6 +1491,9 @@ class FixedShapeModel(nn.Module):
         self.filter_mask[10] = 1.0
         
         print(f"Initialized HyperspectralAutoencoderRandomNoise with filter mask keeping filters 1,3,5,7,9,11")
+
+        self.min_snr = min_snr
+        self.max_snr = max_snr
 
 
     def add_fixed_noise(self, z):
@@ -1514,7 +1530,7 @@ class FixedShapeModel(nn.Module):
         # Generate Gaussian white noise with the same shape as input tensor
         noise = torch.randn_like(tensor) * torch.sqrt(noise_power)
         # Return tensor with added noise
-        return tensor + noise, target_snr
+        return tensor + noise#, target_snr
     
     def forward(self, x, add_noise=True):
         """
@@ -1553,5 +1569,7 @@ class FixedShapeModel(nn.Module):
         # Convert back to BHWC format
         encoded = encoded_channels_first.permute(0, 2, 3, 1)
         decoded = decoded_channels_first.permute(0, 2, 3, 1)
+
+        snr = self.noise_level
         
-        return decoded, encoded
+        return decoded, encoded, snr

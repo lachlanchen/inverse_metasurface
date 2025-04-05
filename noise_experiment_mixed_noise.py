@@ -42,7 +42,7 @@ from AWAN import AWAN
 latent_dim = 11
 in_channels = 100
 
-from shape2filter_with_s4 import Shape2FilterWithS4
+# from shape2filter_with_s4 import Shape2FilterWithS4
 
 ###############################################################################
 # TRAINING FUNCTION WITH RANDOM NOISE
@@ -754,18 +754,6 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
 ###############################################################################
 
 
-# #!/usr/bin/env python3
-# import torch
-# import torch.nn as nn
-# import torch.optim as optim
-# import numpy as np
-# import matplotlib.pyplot as plt
-# import os
-# from torch.utils.data import DataLoader, TensorDataset
-# from tqdm import tqdm
-# import random
-# import json
-
 def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, test_loader, train_data, test_data,
                           noise_level, num_epochs, batch_size, decoder_lr, filter_scale_factor, 
                           output_dir, viz_interval_stage2=1, use_s4=False):
@@ -794,8 +782,10 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     # Create output directory
     shape_dir = os.path.join(output_dir, f"shape_{shape_name}")
     recon_dir = os.path.join(shape_dir, "reconstructions")
+    spectrum_dir = os.path.join(shape_dir, "spectrum")
     os.makedirs(shape_dir, exist_ok=True)
     os.makedirs(recon_dir, exist_ok=True)
+    os.makedirs(spectrum_dir, exist_ok=True)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -860,8 +850,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     # Generate visualizations with a single sample
     with torch.no_grad():
         # Get reconstruction for visualization
-        train_recon, _ = model(train_sample, add_noise=True)  # Use random noise during training
-        test_recon, _ = model(test_sample, add_noise=True)    # Use random noise during training
+        train_recon, _, _ = model(train_sample, add_noise=True)  # Use random noise during training
+        test_recon, _, _ = model(test_sample, add_noise=True)    # Use random noise during training
 
     # Save initial metrics
     metrics['train_loss'].append(train_mse)
@@ -875,7 +865,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     initial_recon_path = os.path.join(recon_dir, "reconstruction_epoch_0.png")
     with torch.no_grad():
         model.eval()
-        train_out, _ = model(train_sample, add_noise=True)  # Use random noise during training
+        train_out, _, _ = model(train_sample, add_noise=True)  # Use random noise during training
         
         # Plot original, reconstruction, and difference
         plt.figure(figsize=(15, 5))
@@ -916,6 +906,12 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         plt.tight_layout()
         plt.savefig(initial_recon_path)
         plt.close()
+        
+        # Create initial spectrum visualization
+        initial_spectrum_path = os.path.join(spectrum_dir, "spectrum_epoch_0.png")
+        _, _, _ = visualize_reconstruction_spectrum(
+            model, train_sample, device, initial_spectrum_path
+        )
     
     # Print initial metrics with more detail
     print(f"\nInitial {shape_name} metrics at {noise_level} dB:")
@@ -948,7 +944,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             x = x.to(device)
             
             # Forward pass - use random noise during training
-            recon, _ = model(x, add_noise=True)
+            recon, _, _ = model(x, add_noise=True)
             
             # Loss
             loss = criterion(recon, x)
@@ -979,8 +975,8 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
         # Generate visualizations with a single sample
         with torch.no_grad():
             # Get reconstruction for visualization
-            train_recon, _ = model(train_sample, add_noise=True)
-            test_recon, _ = model(test_sample, add_noise=True)
+            train_recon, _, _ = model(train_sample, add_noise=True)
+            test_recon, _, _ = model(test_sample, add_noise=True)
             
             # Test set evaluation
             test_loss = 0.0
@@ -991,7 +987,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                     x = batch
                 
                 x = x.to(device)
-                recon, _ = model(x, add_noise=True)  # Use random noise during training
+                recon, _, _ = model(x, add_noise=True)  # Use random noise during training
                 loss = criterion(recon, x)
                 test_loss += loss.item()
             
@@ -1022,7 +1018,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             best_recon_path = os.path.join(shape_dir, "best_reconstruction.png")
             with torch.no_grad():
                 model.eval()
-                train_out, _ = model(train_sample, add_noise=True)  # Use random noise during training
+                train_out, _, _ = model(train_sample, add_noise=True)  # Use random noise during training
                 
                 # Plot original, reconstruction, and difference
                 plt.figure(figsize=(15, 5))
@@ -1063,6 +1059,12 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 plt.tight_layout()
                 plt.savefig(best_recon_path)
                 plt.close()
+                
+                # Create best model spectrum visualization
+                best_spectrum_path = os.path.join(spectrum_dir, "best_spectrum.png")
+                _, _, _ = visualize_reconstruction_spectrum(
+                    model, train_sample, device, best_spectrum_path
+                )
             
             print(f"  New best model at epoch {epoch+1} - Test MSE: {best_test_loss:.6f}")
         
@@ -1071,7 +1073,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
             recon_path = os.path.join(recon_dir, f"reconstruction_epoch_{epoch+1}.png")
             with torch.no_grad():
                 model.eval()
-                train_out, _ = model(train_sample, add_noise=True)  # Use random noise during training
+                train_out, _, _ = model(train_sample, add_noise=True)  # Use random noise during training
                 
                 # Plot original, reconstruction, and difference
                 plt.figure(figsize=(15, 5))
@@ -1112,6 +1114,12 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
                 plt.tight_layout()
                 plt.savefig(recon_path)
                 plt.close()
+                
+                # Create spectrum visualization for this epoch
+                epoch_spectrum_path = os.path.join(spectrum_dir, f"spectrum_epoch_{epoch+1}.png")
+                _, _, _ = visualize_reconstruction_spectrum(
+                    model, train_sample, device, epoch_spectrum_path
+                )
     
     # Save final detailed metrics
     print(f"\nFinal {shape_name} metrics at {noise_level} dB after {num_epochs} epochs:")
@@ -1119,6 +1127,20 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     print(f"  Test  - MSE: {metrics['test_loss'][-1]:.6f}, PSNR: {metrics['test_psnr'][-1]:.2f} dB, SAM: {metrics['test_sam'][-1]:.6f} rad")
     print(f"  Best model at epoch {best_epoch+1} - Test MSE: {best_test_loss:.6f}")
     print(f"  Filter condition number: {condition_number:.4f}")
+    
+    # Final spectrum visualization
+    final_spectrum_path = os.path.join(spectrum_dir, "final_spectrum.png")
+    with torch.no_grad():
+        model.eval()
+        _, _, _ = visualize_reconstruction_spectrum(
+            model, train_sample, device, final_spectrum_path
+        )
+        
+        # Also visualize test sample spectrum
+        test_spectrum_path = os.path.join(spectrum_dir, "test_final_spectrum.png")
+        _, _, _ = visualize_reconstruction_spectrum(
+            model, test_sample, device, test_spectrum_path
+        )
     
     # Save model
     model_save_path = os.path.join(shape_dir, "decoder_model.pt")
@@ -1218,6 +1240,7 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     return model, metrics
 
 
+
 def evaluate_fixed_shape_at_noise_level(model, shape_name, noise_level, train_data, test_data, 
                                        batch_size, output_dir, sample_indices=None):
     """
@@ -1244,7 +1267,11 @@ def evaluate_fixed_shape_at_noise_level(model, shape_name, noise_level, train_da
     
     # Create evaluation directory
     eval_dir = os.path.join(output_dir, f"shape_{shape_name}_noise_{noise_level}dB")
+    recon_dir = os.path.join(eval_dir, "reconstructions")
+    spectrum_dir = os.path.join(eval_dir, "spectrum")
     os.makedirs(eval_dir, exist_ok=True)
+    os.makedirs(recon_dir, exist_ok=True)
+    os.makedirs(spectrum_dir, exist_ok=True)
     
     # Select samples for visualization
     if sample_indices is None:
@@ -1296,7 +1323,7 @@ def evaluate_fixed_shape_at_noise_level(model, shape_name, noise_level, train_da
         idx = train_viz_indices[i]
         with torch.no_grad():
             # Get reconstruction with fixed noise level
-            train_out, _ = model(train_sample, add_noise=False)  # Use fixed noise level
+            train_out, _, _ = model(train_sample, add_noise=False)  # Use fixed noise level
             
             # Plot original, reconstruction, and difference
             plt.figure(figsize=(15, 5))
@@ -1335,15 +1362,21 @@ def evaluate_fixed_shape_at_noise_level(model, shape_name, noise_level, train_da
             plt.colorbar(im3, fraction=0.046, pad=0.04)
             
             plt.tight_layout()
-            plt.savefig(os.path.join(eval_dir, f"train_sample_{idx}_noise_{noise_level}dB.png"))
+            plt.savefig(os.path.join(recon_dir, f"train_sample_{idx}_noise_{noise_level}dB.png"))
             plt.close()
+            
+            # Create spectrum visualization for this train sample
+            train_spectrum_path = os.path.join(spectrum_dir, f"train_sample_{idx}_spectrum.png")
+            _, _, _ = visualize_reconstruction_spectrum(
+                model, train_sample, device, train_spectrum_path
+            )
     
     # Test samples
     for i, test_sample in enumerate(test_viz_samples):
         idx = test_viz_indices[i]
         with torch.no_grad():
             # Get reconstruction with fixed noise level
-            test_out, _ = model(test_sample, add_noise=False)  # Use fixed noise level
+            test_out, _, _ = model(test_sample, add_noise=False)  # Use fixed noise level
             
             # Plot original, reconstruction, and difference
             plt.figure(figsize=(15, 5))
@@ -1382,8 +1415,14 @@ def evaluate_fixed_shape_at_noise_level(model, shape_name, noise_level, train_da
             plt.colorbar(im3, fraction=0.046, pad=0.04)
             
             plt.tight_layout()
-            plt.savefig(os.path.join(eval_dir, f"test_sample_{idx}_noise_{noise_level}dB.png"))
+            plt.savefig(os.path.join(recon_dir, f"test_sample_{idx}_noise_{noise_level}dB.png"))
             plt.close()
+            
+            # Create spectrum visualization for this test sample
+            test_spectrum_path = os.path.join(spectrum_dir, f"test_sample_{idx}_spectrum.png")
+            _, _, _ = visualize_reconstruction_spectrum(
+                model, test_sample, device, test_spectrum_path
+            )
     
     # Save evaluation metrics
     with open(os.path.join(eval_dir, 'evaluation_metrics.txt'), 'w') as f:

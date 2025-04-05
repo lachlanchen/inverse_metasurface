@@ -25,7 +25,7 @@ from noise_experiment_with_blind_noise import (
     generate_initial_filter, DecoderCNN5Layer
 )
 
-from shape2filter_with_s4 import Shape2FilterWithS4
+from shape2filter_with_s4_comparison import Shape2FilterWithS4
 
 from AWAN import AWAN
 latent_dim = 11
@@ -70,11 +70,13 @@ def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None,
     if data_on_device or original_data.shape[0] <= batch_size:
         with torch.no_grad():
             # Single forward pass
-            if is_fixed_shape:
-                reconstructed, _ = model(original_data)
-                snr = 0
-            else:
-                reconstructed, _, snr = model(original_data)
+            # if is_fixed_shape:
+            #     reconstructed, _ = model(original_data)
+            #     snr = 0
+            # else:
+            #     reconstructed, _, snr = model(original_data)
+            reconstructed, _, snr = model(original_data)
+
             
             # Convert SNR to scalar if it's a tensor
             if torch.is_tensor(snr):
@@ -150,11 +152,11 @@ def calculate_metrics_in_batch(original_data, model, batch_size=16, device=None,
             # Single forward pass for this batch
             # reconstructed, _, _ = model(x)
              # Single forward pass
-            if is_fixed_shape:
-                reconstructed, _ = model(x)
-                snr = 0
-            else:
-                reconstructed, _, snr = model(x)
+            # if is_fixed_shape:
+            #     reconstructed, _ = model(x)
+            #     snr = 0
+            # else:
+            reconstructed, _, snr = model(x)
             
             # MSE calculation for the batch
             batch_squared_diff_sum = ((reconstructed - x) ** 2).sum().item()
@@ -1431,7 +1433,7 @@ class FixedShapeModel(nn.Module):
         
         # Load shape2filter model
         if use_s4:
-            self.shape2filter = Shape2FilterWithS4(mode="transmittance", max_workers=4)
+            self.shape2filter = Shape2FilterWithS4(mode="transmittance", max_workers=4, nn_model_path="outputs_three_stage_20250322_145925/stageA/shape2spec_stageA.pt")
         else:
             self.shape2filter = Shape2FilterModel().to(device)
             self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
@@ -1531,5 +1533,7 @@ class FixedShapeModel(nn.Module):
         # Convert back to BHWC format
         encoded = encoded_channels_first.permute(0, 2, 3, 1)
         decoded = decoded_channels_first.permute(0, 2, 3, 1)
+
+        snr = self.noise_level
         
-        return decoded, encoded
+        return decoded, encoded, snr

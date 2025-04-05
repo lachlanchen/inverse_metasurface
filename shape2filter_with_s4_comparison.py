@@ -14,6 +14,7 @@ matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+import traceback
 
 def save_simple_shape_plot(shape_tensor, output_dir, sample_id):
     """
@@ -63,7 +64,7 @@ class Shape2FilterWithS4(nn.Module):
     Has the same API as ShapeToSpectraModel, but uses direct S4 simulations
     instead of a neural network to predict spectral responses.
     """
-    def __init__(self, mode='transmittance', max_workers=4, nn_model_path=None):
+    def __init__(self, mode='transmittance', max_workers=4, nn_model_path="outputs_three_stage_20250322_145925/stageA/shape2spec_stageA.pt"):
         super(Shape2FilterWithS4, self).__init__()
         self.mode = mode.lower()  # 'transmittance' or 'reflectance'
         self.max_workers = max_workers
@@ -166,7 +167,7 @@ class Shape2FilterWithS4(nn.Module):
 
             # Get neural network prediction
             with torch.no_grad():
-                nn_output = self.nn_model(shape_tensor)  # (1, 11, 100)
+                nn_output = self.nn_model(shape_tensor.to("cpu"))  # (1, 11, 100)
             
             nn_spectra = nn_output.cpu().numpy().squeeze(0)  # (11, 100)
             
@@ -220,6 +221,8 @@ class Shape2FilterWithS4(nn.Module):
                     wavelength_indices=x_axis)
             
         except Exception:
+            
+            traceback.print_exc()
             pass  # Silently ignore errors to keep the comparison secret
     
     def forward(self, shape_4x3):
