@@ -25,6 +25,7 @@ from noise_experiment_with_blind_noise import (
     generate_initial_filter, DecoderCNN5Layer
 )
 
+from shape2filter_with_s4 import Shape2FilterWithS4
 
 from AWAN import AWAN
 latent_dim = 11
@@ -1412,7 +1413,13 @@ class HyperspectralAutoencoderRandomNoise(nn.Module):
 ###############################################################################
 class FixedShapeModel(nn.Module):
     """Model with fixed shape encoder and trainable decoder with fixed noise level"""
-    def __init__(self, shape, shape2filter_path, noise_level=30, min_snr=10, max_snr=40, filter_scale_factor=10.0, device=None):
+    def __init__(self, 
+        shape, shape2filter_path, 
+        noise_level=30, 
+        min_snr=10, max_snr=40, 
+        filter_scale_factor=10.0, device=None,
+        use_s4=True
+    ):
         super(FixedShapeModel, self).__init__()
         
         if device is None:
@@ -1423,13 +1430,16 @@ class FixedShapeModel(nn.Module):
         self.filter_scale_factor = filter_scale_factor
         
         # Load shape2filter model
-        self.shape2filter = Shape2FilterModel().to(device)
-        self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
-        self.shape2filter.eval()  # Set to evaluation mode
+        if use_s4:
+            self.shape2filter = Shape2FilterWithS4(mode="transmittance", max_workers=4)
+        else:
+            self.shape2filter = Shape2FilterModel().to(device)
+            self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
+            self.shape2filter.eval()  # Set to evaluation mode
         
-        for param in self.shape2filter.parameters():
-            param.requires_grad = False
-        
+            for param in self.shape2filter.parameters():
+                param.requires_grad = False
+            
         # Convert shape to tensor if it's a numpy array
         if isinstance(shape, np.ndarray):
             self.shape = torch.tensor(shape, dtype=torch.float32).to(device)
@@ -1447,8 +1457,11 @@ class FixedShapeModel(nn.Module):
         
         # Decoder
         self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
+
+        self.min_snr = min_snr
+        self.max_snr = max_snr
     
-    def add_noise(self, z):
+    def add_fixed_noise(self, z):
         """Add noise with fixed SNR level"""
         # Calculate signal power
         signal_power = z.detach().pow(2).mean()
@@ -1482,7 +1495,7 @@ class FixedShapeModel(nn.Module):
         # Generate Gaussian white noise with the same shape as input tensor
         noise = torch.randn_like(tensor) * torch.sqrt(noise_power)
         # Return tensor with added noise
-        return tensor + noise, target_snr
+        return tensor + noise#, target_snr
     
     def forward(self, x, add_noise=True):
         """
@@ -1508,8 +1521,10 @@ class FixedShapeModel(nn.Module):
         
         # Add noise if specified
         if add_noise:
-            encoded_channels_first = self.add_noise(encoded_channels_first)
-        
+            encoded_channels_first = self.add_random_noise(encoded_channels_first)
+        else:
+            encoded_channels_first = self.add_fixed_noise(encoded_channels_first)
+
         # Decode
         decoded_channels_first = self.decoder(encoded_channels_first)
         

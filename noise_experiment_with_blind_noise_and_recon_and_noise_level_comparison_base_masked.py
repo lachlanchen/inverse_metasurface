@@ -463,7 +463,7 @@ class HyperspectralAutoencoderRandomNoise(nn.Module):
         filter = self.get_reconstructed_filter_with_grad()  # Shape: [11, 100]
 
         # Apply the filter mask to selectively use only certain filters
-        masked_filter = filter * self.filter_mask
+        filter = filter * self.filter_mask
         
         # Convert input from BHWC to BCHW format for PyTorch convolution
         x_channels_first = x.permute(0, 3, 1, 2)

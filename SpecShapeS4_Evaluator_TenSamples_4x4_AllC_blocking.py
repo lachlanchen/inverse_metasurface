@@ -192,7 +192,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Load preprocessed NPZ file (adjust path if needed)
-    npz_file = "preprocessed_data.npz"
+    # npz_file = "preprocessed_data.npz"
+    npz_file = "preprocessed_t_data.npz"
     if not os.path.exists(npz_file):
         print("Error: NPZ file not found:", npz_file)
         sys.exit(1)
@@ -209,9 +210,12 @@ def main():
         sys.exit(1)
     chosen_indices = random.sample(range(total_samples), n_samples)
     
-    # Load the trained models (adjust paths if necessary)
-    spec2shape_ckpt = "outputs_three_stage_20250216_180408/stageB/spec2shape_stageB.pt"
-    shape2spec_ckpt = "outputs_three_stage_20250216_180408/stageA/shape2spec_stageA.pt"
+    # # Load the trained models (adjust paths if necessary)
+    # spec2shape_ckpt = "outputs_three_stage_20250216_180408/stageB/spec2shape_stageB.pt"
+    # shape2spec_ckpt = "outputs_three_stage_20250216_180408/stageA/shape2spec_stageA.pt"
+    # outputs_three_stage_20250322_145925
+    spec2shape_ckpt = "outputs_three_stage_20250322_145925/stageB/spec2shape_stageB.pt"
+    shape2spec_ckpt = "outputs_three_stage_20250322_145925/stageA/shape2spec_stageA.pt"
     
     if not os.path.exists(spec2shape_ckpt):
         print("Error: spec2shape checkpoint not found:", spec2shape_ckpt)
