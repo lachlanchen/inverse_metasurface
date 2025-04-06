@@ -1434,7 +1434,12 @@ class HyperspectralAutoencoderRandomNoise(nn.Module):
 ###############################################################################
 class FixedShapeModel(nn.Module):
     """Model with fixed shape encoder and trainable decoder with fixed noise level"""
-    def __init__(self, shape, shape2filter_path, noise_level=30, min_snr=10, max_snr=40, filter_scale_factor=10.0, device=None):
+    def __init__(self, 
+        shape, shape2filter_path, 
+        noise_level=30, min_snr=10, max_snr=40, 
+        filter_scale_factor=10.0, device=None,
+        use_s4=True
+    ):
         super(FixedShapeModel, self).__init__()
         
         if device is None:
@@ -1448,6 +1453,8 @@ class FixedShapeModel(nn.Module):
         # self.shape2filter = Shape2FilterModel().to(device)
         # self.shape2filter.load_state_dict(torch.load(shape2filter_path, map_location=device))
         # self.shape2filter.eval()  # Set to evaluation mode
+        # for param in self.shape2filter.parameters():
+        #     param.requires_grad = False
 
         # Load shape2filter model
         if use_s4:
@@ -1460,8 +1467,7 @@ class FixedShapeModel(nn.Module):
             for param in self.shape2filter.parameters():
                 param.requires_grad = False
         
-        for param in self.shape2filter.parameters():
-            param.requires_grad = False
+        
         
         # Convert shape to tensor if it's a numpy array
         if isinstance(shape, np.ndarray):
@@ -1481,6 +1487,10 @@ class FixedShapeModel(nn.Module):
         # Decoder
         self.decoder = AWAN(inplanes=latent_dim, planes=in_channels, channels=128, n_DRBs=2)
     
+        
+        self.min_snr = min_snr
+        self.max_snr = max_snr
+
         # Create a filter mask that only keeps filters 1, 3, 5, 7, 9, 11 (indices 0, 2, 4, 6, 8, 10)
         self.filter_mask = torch.zeros(11, 100, device=self.device)
         self.filter_mask[0] = 1.0
@@ -1492,8 +1502,6 @@ class FixedShapeModel(nn.Module):
         
         print(f"Initialized HyperspectralAutoencoderRandomNoise with filter mask keeping filters 1,3,5,7,9,11")
 
-        self.min_snr = min_snr
-        self.max_snr = max_snr
 
 
     def add_fixed_noise(self, z):
