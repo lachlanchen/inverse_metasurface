@@ -676,8 +676,10 @@ def process_aviris_data(aviris_folder, subfolder, csv_file, output_folder, tile_
     print("\nStep 5: Rescaling the selected data cube to 0-1 range...")
 
     # Find global min and max across all bands in selected data (considering only valid pixels)
-    global_min = np.inf
-    global_max = -np.inf
+    # global_min = np.inf
+    # global_max = -np.inf
+    global_min = 1
+    global_max = 0
 
     for i in range(len(selected_bands)):
         band_data = selected_data[:,:,i]
