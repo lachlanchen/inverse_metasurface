@@ -270,7 +270,7 @@ def train_with_random_noise(shape2filter_path, filter2shape_path, output_dir, mi
     
     lowest_train_mse = initial_mse
     lowest_mse_shape = initial_shape.copy()
-    lowest_mse_filter = initial_filter.copy()
+    lowest_mse_filter = torch.tensor(initial_filter.copy()).to(device)
     lowest_mse_epoch = -1
     
     # Create separate optimizers for encoder and decoder
