@@ -818,11 +818,11 @@ def train_with_fixed_shape(shape_name, shape, shape2filter_path, train_loader, t
     model = model.to(device)
     
     # Create optimizer for decoder only
-    optimizer = optim.Adam(model.decoder.parameters(), lr=decoder_lr)
+    encoder_optimizer = optimizer = optim.Adam(model.decoder.parameters(), lr=decoder_lr)
 
     # Option 1: CosineAnnealingLR - smooth cosine decay
     encoder_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=num_epochs, eta_min=0.00001
+        encoder_optimizer, T_max=num_epochs, eta_min=0.00001
     )
     
     # Loss function
